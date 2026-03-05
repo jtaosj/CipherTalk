@@ -1,0 +1,78 @@
+name: Sync All Branches
+
+on:
+  schedule:
+    # 每天 UTC 时间 0 点 6 分同步
+    - cron: '0 6 * * *'
+  # 支持手动触发
+  workflow_dispatch:
+  # 当上游仓库有新 release 时触发
+  repository_dispatch:
+    types: [upstream-sync]
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    # 必须设置权限，否则无法 push
+    permissions:
+      contents: write
+    
+    steps:
+    - name: Checkout fork
+      uses: actions/checkout@v4
+      with:
+        # 不指定 ref，默认 checkout 默认分支
+        # 设置为 0 以获取所有分支和完整历史（关键！）
+        fetch-depth: 0
+        token: ${{ secrets.PAT }}
+
+    - name: Configure Git
+      run: |
+        git config user.name "github-actions[bot]"
+        git config user.email "github-actions[bot]@users.noreply.github.com"
+
+    - name: Add upstream remote
+      run: |
+        # 添加上游仓库地址
+        git remote add upstream https://github.com/ILoveBingLu/CipherTalk.git
+        #以此拉取上游所有分支信息
+        git fetch upstream
+
+    - name: Sync all branches
+      run: |
+        # 1. 获取上游所有远程分支列表 (排除 HEAD 指针)
+        # sed 命令用于去除 'upstream/' 前缀，只保留分支名
+        branches=$(git branch -r | grep 'upstream/' | grep -v 'HEAD' | sed 's/^[[:space:]]*upstream\///')
+
+        echo "Detected upstream branches: $branches"
+
+        # 2. 遍历每一个分支
+        for branch in $branches; do
+          echo "----------------------------------------------"
+          echo "Processing branch: $branch"
+          
+          # 3. 判断本地是否已有该分支
+          if git show-ref --verify --quiet "refs/heads/$branch"; then
+            echo "Branch '$branch' exists locally. Checking out..."
+            git checkout "$branch"
+            
+            # 尝试合并上游更新
+            echo "Merging upstream/$branch..."
+            if git merge "upstream/$branch" --no-edit; then
+              echo "Merge successful. Pushing to origin..."
+              git push origin "$branch"
+            else
+              # 如果发生冲突，终止合并，跳过该分支，防止脚本报错退出
+              echo "⚠️ Merge conflict detected in $branch! Skipping..."
+              git merge --abort
+            fi
+            
+          else
+            echo "Branch '$branch' does not exist locally. Creating from upstream..."
+            # 如果本地没有，直接基于上游分支创建新分支
+            git checkout -b "$branch" "upstream/$branch"
+            
+            echo "Pushing new branch to origin..."
+            git push origin "$branch"
+          fi
+        done
