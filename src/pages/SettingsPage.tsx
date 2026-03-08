@@ -150,6 +150,10 @@ function SettingsPage() {
   const [logSize, setLogSize] = useState<number>(0)
   const [currentLogLevel, setCurrentLogLevel] = useState<string>('WARN')
 
+  // 配置变化状态
+  const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false)
+  const [initialConfig, setInitialConfig] = useState<any>(null)
+
   useEffect(() => {
     loadConfig()
     loadDefaultExportPath()
@@ -230,6 +234,37 @@ function SettingsPage() {
       const savedCloseToTray = await configService.getCloseToTray()
       setCloseToTray(savedCloseToTray)
 
+      // 保存初始配置用于比较
+      setInitialConfig({
+        decryptKey: savedKey || '',
+        dbPath: savedPath || '',
+        wxid: savedWxid || '',
+        cachePath: savedCachePath || '',
+        imageXorKey: savedXorKey || '',
+        imageAesKey: savedAesKey || '',
+        exportPath: savedExportPath || '',
+        sttLanguages: savedSttLanguages && savedSttLanguages.length > 0 ? savedSttLanguages : ['zh'],
+        sttModelType: savedSttModelType,
+        skipIntegrityCheck: savedSkipIntegrityCheck,
+        autoUpdateDatabase: savedAutoUpdateDatabase,
+        autoUpdateCheckInterval: savedCheckInterval,
+        autoUpdateMinInterval: savedMinInterval,
+        autoUpdateDebounceTime: savedDebounceTime,
+        quoteStyle: savedQuoteStyle,
+        exportDefaultDateRange: savedExportDefaultDateRange,
+        exportDefaultAvatars: savedExportDefaultAvatars,
+        aiProvider: savedAiProvider,
+        aiApiKey: savedAiApiKey,
+        aiModel: savedAiModel,
+        aiDefaultTimeRange: savedAiDefaultTimeRange,
+        aiSummaryDetail: savedAiSummaryDetail,
+        aiSystemPromptPreset: savedAiSystemPromptPreset,
+        aiCustomSystemPrompt: savedAiCustomSystemPrompt,
+        aiEnableThinking: savedAiEnableThinking,
+        aiMessageLimit: savedAiMessageLimit,
+        closeToTray: savedCloseToTray
+      })
+
     } catch (e) {
       console.error('加载配置失败:', e)
     }
@@ -243,6 +278,53 @@ function SettingsPage() {
       console.error('获取默认导出路径失败:', e)
     }
   }
+
+  // 监听配置变化
+  useEffect(() => {
+    if (!initialConfig) return
+
+    const currentConfig = {
+      decryptKey,
+      dbPath,
+      wxid,
+      cachePath,
+      imageXorKey,
+      imageAesKey,
+      exportPath,
+      sttLanguages,
+      sttModelType,
+      skipIntegrityCheck,
+      autoUpdateDatabase,
+      autoUpdateCheckInterval,
+      autoUpdateMinInterval,
+      autoUpdateDebounceTime,
+      quoteStyle,
+      exportDefaultDateRange,
+      exportDefaultAvatars,
+      aiProvider,
+      aiApiKey,
+      aiModel,
+      aiDefaultTimeRange,
+      aiSummaryDetail,
+      aiSystemPromptPreset,
+      aiCustomSystemPrompt,
+      aiEnableThinking,
+      aiMessageLimit,
+      closeToTray
+    }
+
+    // 深度比较配置是否有变化
+    const hasChanges = JSON.stringify(currentConfig) !== JSON.stringify(initialConfig)
+    setHasUnsavedChanges(hasChanges)
+  }, [
+    decryptKey, dbPath, wxid, cachePath, imageXorKey, imageAesKey, exportPath,
+    sttLanguages, sttModelType, skipIntegrityCheck, autoUpdateDatabase,
+    autoUpdateCheckInterval, autoUpdateMinInterval, autoUpdateDebounceTime,
+    quoteStyle, exportDefaultDateRange, exportDefaultAvatars,
+    aiProvider, aiApiKey, aiModel, aiDefaultTimeRange, aiSummaryDetail,
+    aiSystemPromptPreset, aiCustomSystemPrompt, aiEnableThinking, aiMessageLimit,
+    closeToTray, initialConfig
+  ])
 
   const loadAppVersion = async () => {
     try {
@@ -776,6 +858,38 @@ function SettingsPage() {
       }
 
       showMessage('配置保存成功', true)
+      
+      // 保存成功后更新初始配置，重置变化状态
+      setInitialConfig({
+        decryptKey,
+        dbPath,
+        wxid,
+        cachePath,
+        imageXorKey,
+        imageAesKey,
+        exportPath,
+        sttLanguages,
+        sttModelType,
+        skipIntegrityCheck,
+        autoUpdateDatabase,
+        autoUpdateCheckInterval,
+        autoUpdateMinInterval,
+        autoUpdateDebounceTime,
+        quoteStyle,
+        exportDefaultDateRange,
+        exportDefaultAvatars,
+        aiProvider,
+        aiApiKey,
+        aiModel,
+        aiDefaultTimeRange,
+        aiSummaryDetail,
+        aiSystemPromptPreset,
+        aiCustomSystemPrompt,
+        aiEnableThinking,
+        aiMessageLimit,
+        closeToTray
+      })
+      setHasUnsavedChanges(false)
     } catch (e) {
       showMessage(`保存配置失败: ${e}`, false)
     } finally {
@@ -2682,7 +2796,12 @@ function SettingsPage() {
       </div>
 
       {/* 悬浮保存按钮 */}
-      <button className="floating-save-btn" onClick={handleSaveConfig} disabled={isLoading} title="保存配置">
+      <button 
+        className={`floating-save-btn ${hasUnsavedChanges ? 'has-changes' : ''}`} 
+        onClick={handleSaveConfig} 
+        disabled={isLoading} 
+        title={hasUnsavedChanges ? '有未保存的更改，点击保存' : '保存配置'}
+      >
         <Save size={20} />
       </button>
 

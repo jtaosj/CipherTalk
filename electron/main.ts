@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, nativeTheme, protocol, net } from 'electron'
+import { app, BrowserWindow, ipcMain, nativeTheme, protocol, net, Tray, Menu } from 'electron'
 import { join } from 'path'
 import { readFileSync, existsSync, mkdirSync } from 'fs'
 import { autoUpdater } from 'electron-updater'
@@ -26,6 +26,13 @@ import { voiceTranscribeServiceWhisper } from './services/voiceTranscribeService
 import { windowsHelloService, WindowsHelloResult } from './services/windowsHelloService'
 import { shortcutService } from './services/shortcutService'
 import { httpApiService } from './services/httpApiService'
+
+// 扩展 app 对象类型，添加 isQuitting 标志
+declare module 'electron' {
+  interface App {
+    isQuitting?: boolean
+  }
+}
 
 // 注册自定义协议为特权协议（必须在 app ready 之前）
 protocol.registerSchemesAsPrivileged([
@@ -82,6 +89,9 @@ let dbService: DatabaseService | null = null
 let configService: ConfigService | null = null
 let logService: LogService | null = null
 
+// 系统托盘实例
+let tray: Tray | null = null
+
 // 聊天窗口实例
 let chatWindow: BrowserWindow | null = null
 // 朋友圈窗口实例
@@ -130,6 +140,56 @@ function getAppIconPath(): string {
   }
 }
 
+/**
+ * 创建系统托盘
+ */
+function createTray() {
+  if (tray) return tray
+
+  const iconPath = getAppIconPath()
+  tray = new Tray(iconPath)
+
+  const contextMenu = Menu.buildFromTemplate([
+    {
+      label: '显示主窗口',
+      click: () => {
+        if (mainWindow) {
+          if (mainWindow.isMinimized()) {
+            mainWindow.restore()
+          }
+          mainWindow.show()
+          mainWindow.focus()
+        }
+      }
+    },
+    { type: 'separator' },
+    {
+      label: '退出',
+      click: () => {
+        // 设置标志，允许真正退出
+        app.isQuitting = true
+        app.quit()
+      }
+    }
+  ])
+
+  tray.setToolTip('密语 CipherTalk')
+  tray.setContextMenu(contextMenu)
+
+  // 双击托盘图标显示窗口
+  tray.on('double-click', () => {
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) {
+        mainWindow.restore()
+      }
+      mainWindow.show()
+      mainWindow.focus()
+    }
+  })
+
+  return tray
+}
+
 function createWindow() {
   const iconPath = getAppIconPath()
 
@@ -172,6 +232,29 @@ function createWindow() {
   // 窗口准备好后显示
   win.once('ready-to-show', () => {
     win.show()
+  })
+
+  // 监听窗口关闭事件
+  win.on('close', (event) => {
+    // 如果是真正退出应用，不阻止
+    if (app.isQuitting) {
+      return
+    }
+
+    // 获取关闭行为配置
+    const closeToTray = configService?.get('closeToTray')
+    
+    // 如果配置为关闭到托盘（默认为 true）
+    if (closeToTray !== false) {
+      event.preventDefault()
+      win.hide()
+      
+      // 确保托盘已创建
+      if (!tray) {
+        createTray()
+      }
+    }
+    // 否则允许窗口关闭，应用退出
   })
 
   // 开发环境加载 vite 服务器
@@ -3737,6 +3820,9 @@ app.whenReady().then(async () => {
   if (shouldShowSplash !== false || configService?.get('myWxid')) {
     // 创建主窗口（但不立即显示）
     mainWindow = createWindow()
+    
+    // 创建系统托盘
+    createTray()
   }
 
   // 如果显示了启动屏，主窗口会在启动屏关闭后自动显示（通过 ready-to-show 事件）
@@ -3748,20 +3834,34 @@ app.whenReady().then(async () => {
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
       mainWindow = createWindow()
+      createTray()
     }
   })
 })
 
 app.on('window-all-closed', () => {
+  // macOS 上保持应用运行
   if (process.platform !== 'darwin') {
-    app.quit()
+    // 如果托盘存在，不退出应用
+    if (!tray) {
+      app.quit()
+    }
   }
 })
 
 app.on('before-quit', () => {
+  // 设置退出标志
+  app.isQuitting = true
+  
   httpApiService.stop().catch((e) => {
     console.error('[HttpApi] 停止失败:', e)
   })
   // 关闭配置数据库连接
   configService?.close()
+  
+  // 销毁托盘
+  if (tray) {
+    tray.destroy()
+    tray = null
+  }
 })

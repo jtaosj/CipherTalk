@@ -1,7 +1,7 @@
-﻿/**
+/**
  * HTML 导出生成器
  * 生成现代风格的聊天记录 HTML 页面
- * 支持图片/视频内联显示、搜索、主题切换
+ * 支持图片/视频内联显示、搜索、主题切换、日期跳转
  */
 
 export interface HtmlExportMessage {
@@ -38,6 +38,7 @@ export interface HtmlExportData {
   meta: {
     sessionId: string
     sessionName: string
+    sessionAvatar?: string
     isGroup: boolean
     exportTime: number
     messageCount: number
@@ -57,6 +58,11 @@ export class HtmlExportGenerator {
       ? `${new Date(exportData.meta.dateRange.start * 1000).toLocaleDateString('zh-CN')} - ${new Date(exportData.meta.dateRange.end * 1000).toLocaleDateString('zh-CN')}`
       : ''
 
+    // 头像 HTML：优先使用真实头像图片，回退到首字符
+    const avatarHtml = exportData.meta.sessionAvatar
+      ? `<img src="${this.escapeHtml(exportData.meta.sessionAvatar)}" onerror="this.style.display='none';this.parentElement.textContent='${escapedSessionName.charAt(0)}'"/>`
+      : escapedSessionName.charAt(0)
+
     return `<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -69,13 +75,14 @@ export class HtmlExportGenerator {
   <div class="app">
     <header class="chat-header">
       <div class="header-left">
-        <div class="header-avatar">${escapedSessionName.charAt(0)}</div>
+        <div class="header-avatar">${avatarHtml}</div>
         <div class="header-info">
           <h1>${escapedSessionName}</h1>
           <span class="header-meta">${exportData.messages.length} 条消息${dateRangeText ? ' · ' + dateRangeText : ''}</span>
         </div>
       </div>
       <div class="header-actions">
+        <button class="icon-btn" id="dateJumpToggle" title="跳转到指定日期">📅</button>
         <button class="icon-btn" id="themeToggle" title="切换主题">🌓</button>
         <button class="icon-btn" id="searchToggle" title="搜索">🔍</button>
       </div>
@@ -85,6 +92,13 @@ export class HtmlExportGenerator {
       <input type="text" id="searchInput" placeholder="搜索消息内容或发送者..." />
       <span id="searchCount"></span>
       <button id="clearSearch">✕</button>
+    </div>
+
+    <div class="date-jump-bar" id="dateJumpBar">
+      <input type="date" id="dateJumpInput" />
+      <button id="dateJumpBtn">跳转</button>
+      <span id="dateJumpHint"></span>
+      <button id="closeDateJump">✕</button>
     </div>
 
     <div class="chat-body" id="chatBody">
@@ -201,6 +215,13 @@ body {
   font-size: 18px;
   font-weight: 600;
   flex-shrink: 0;
+  overflow: hidden;
+}
+
+.header-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
 
 .header-info {
@@ -284,6 +305,60 @@ body {
   padding: 4px 8px;
 }
 
+/* 日期跳转栏 */
+.date-jump-bar {
+  background: var(--header-bg);
+  padding: 0 16px 10px;
+  display: none;
+  align-items: center;
+  gap: 8px;
+}
+
+.date-jump-bar.active {
+  display: flex;
+}
+
+.date-jump-bar input[type="date"] {
+  padding: 6px 12px;
+  border: none;
+  border-radius: 8px;
+  background: rgba(255,255,255,0.15);
+  color: var(--header-text);
+  font-size: 14px;
+  outline: none;
+  color-scheme: dark;
+}
+
+#dateJumpBtn {
+  padding: 6px 14px;
+  border: none;
+  border-radius: 8px;
+  background: rgba(255,255,255,0.25);
+  color: var(--header-text);
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+#dateJumpBtn:hover {
+  background: rgba(255,255,255,0.35);
+}
+
+#dateJumpHint {
+  color: rgba(255,255,255,0.7);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+#closeDateJump {
+  background: none;
+  border: none;
+  color: rgba(255,255,255,0.7);
+  font-size: 16px;
+  cursor: pointer;
+  padding: 4px 8px;
+}
+
 /* 聊天体 */
 .chat-body {
   flex: 1;
@@ -309,6 +384,17 @@ body {
   border-radius: 8px;
   font-size: 12px;
   font-weight: 500;
+}
+
+.date-divider.highlight span {
+  background: var(--link);
+  color: #fff;
+  animation: dateHighlight 2s ease-out forwards;
+}
+
+@keyframes dateHighlight {
+  0% { background: var(--link); color: #fff; }
+  100% { background: var(--system-bg); color: var(--system-text); }
 }
 
 /* 系统消息 */
@@ -621,6 +707,7 @@ body {
 
   document.getElementById('searchToggle').addEventListener('click', () => {
     searchBar.classList.toggle('active');
+    dateJumpBar.classList.remove('active');
     if (searchBar.classList.contains('active')) searchInput.focus();
   });
 
@@ -653,6 +740,115 @@ body {
     loadedCount = 0;
     container.innerHTML = '';
     loadMore();
+  }
+
+  // 日期跳转
+  const dateJumpBar = document.getElementById('dateJumpBar');
+  const dateJumpInput = document.getElementById('dateJumpInput');
+  const dateJumpHint = document.getElementById('dateJumpHint');
+
+  // 设置日期选择器的范围
+  if (messages.length > 0) {
+    const minDate = new Date(messages[0].timestamp * 1000);
+    const maxDate = new Date(messages[messages.length - 1].timestamp * 1000);
+    dateJumpInput.min = toDateStr(minDate);
+    dateJumpInput.max = toDateStr(maxDate);
+    dateJumpInput.value = toDateStr(minDate);
+  }
+
+  function toDateStr(d) {
+    return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+  }
+
+  document.getElementById('dateJumpToggle').addEventListener('click', () => {
+    dateJumpBar.classList.toggle('active');
+    searchBar.classList.remove('active');
+    dateJumpHint.textContent = '';
+  });
+
+  document.getElementById('closeDateJump').addEventListener('click', () => {
+    dateJumpBar.classList.remove('active');
+  });
+
+  document.getElementById('dateJumpBtn').addEventListener('click', jumpToDate);
+  dateJumpInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') jumpToDate();
+  });
+
+  function jumpToDate() {
+    const val = dateJumpInput.value;
+    if (!val) {
+      dateJumpHint.textContent = '请选择日期';
+      return;
+    }
+
+    // 将选择的日期转为当天 00:00:00 的时间戳
+    const parts = val.split('-');
+    const targetDate = new Date(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2]), 0, 0, 0);
+    const targetTs = Math.floor(targetDate.getTime() / 1000);
+
+    // 在当前过滤后的消息列表中，用二分查找找到目标日期第一条消息
+    let lo = 0, hi = filteredMessages.length - 1, found = -1;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      if (filteredMessages[mid].timestamp >= targetTs) {
+        found = mid;
+        hi = mid - 1;
+      } else {
+        lo = mid + 1;
+      }
+    }
+
+    if (found === -1) {
+      dateJumpHint.textContent = '该日期之后无消息';
+      return;
+    }
+
+    // 检查找到的消息是否在目标日期当天
+    const foundDate = new Date(filteredMessages[found].timestamp * 1000);
+    const targetDay = targetDate.toDateString();
+    const foundDay = foundDate.toDateString();
+
+    if (foundDay !== targetDay) {
+      // 该日期无消息，提示跳转到最近的日期
+      var nearFmt = foundDate.getFullYear() + '年' + (foundDate.getMonth() + 1) + '月' + foundDate.getDate() + '日';
+      dateJumpHint.textContent = '该日期无消息，已跳转到最近: ' + nearFmt;
+    } else {
+      dateJumpHint.textContent = '';
+    }
+
+    // 确保消息已加载到 found 的位置
+    if (found >= loadedCount) {
+      // 需要加载更多，一次加载到 found 之后一些
+      var targetLoad = Math.min(found + BATCH, filteredMessages.length);
+      var html = '';
+      for (var i = loadedCount; i < targetLoad; i++) {
+        var prev = i > 0 ? filteredMessages[i - 1] : null;
+        html += renderMsg(filteredMessages[i], prev);
+      }
+      container.insertAdjacentHTML('beforeend', html);
+      loadedCount = targetLoad;
+    }
+
+    // 找到对应的 date-divider 或消息 DOM 元素并滚动到它
+    var dividers = container.querySelectorAll('.date-divider');
+    var scrollTarget = null;
+
+    // 构建目标日期文本用于匹配
+    var targetDateText = fmtDate(filteredMessages[found].timestamp);
+    for (var d = 0; d < dividers.length; d++) {
+      if (dividers[d].textContent.trim() === targetDateText) {
+        scrollTarget = dividers[d];
+        break;
+      }
+    }
+
+    if (scrollTarget) {
+      scrollTarget.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      // 高亮动画
+      scrollTarget.classList.add('highlight');
+      setTimeout(function() { scrollTarget.classList.remove('highlight'); }, 2500);
+    }
   }
 
   // 图片灯箱

@@ -12,13 +12,13 @@ function WhatsNewModal({ onClose, version }: WhatsNewModalProps) {
         {
             icon: <Package size={20} />,
             title: '优化',
-            desc: '优化聊天消息去重逻辑。'
+            desc: '优化html导出。'
         },
         {
             icon: <Package size={20} />,
             title: '优化',
-            desc: '优化多个界面样式，重点优化设置界面。'
-        },
+            desc: '优化最小化至托盘功能。'
+        }
         // {
         //     icon: <Image size={20} />,
         //     title: '聊天内图片',
@@ -29,16 +29,16 @@ function WhatsNewModal({ onClose, version }: WhatsNewModalProps) {
         //     title: '语音导出',
         //     desc: '支持将语音消息解码为 WAV 格式导出，含转写文字。'
         // },
-        {
-            icon: <Filter size={20} />,
-            title: '新增',
-            desc: '新增API端点等功能。'
-        },
-        {
-            icon: <Aperture size={20} />,
-            title: '朋友圈',
-            desc: '优化样式！'
-        }
+        // {
+        //     icon: <Filter size={20} />,
+        //     title: '新增',
+        //     desc: '新增API端点等功能。'
+        // },
+        // {
+        //     icon: <Aperture size={20} />,
+        //     title: '朋友圈',
+        //     desc: '优化样式！'
+        // }
     ]
 
     const handleTelegram = () => {

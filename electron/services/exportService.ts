@@ -2046,6 +2046,7 @@ class ExportService {
         meta: {
           sessionId,
           sessionName: sessionInfo.displayName,
+          sessionAvatar: sessionInfo.avatarUrl || undefined,
           isGroup,
           exportTime: Date.now(),
           messageCount: allMessages.length,
@@ -2149,8 +2150,8 @@ class ExportService {
           detail: '正在读取消息...'
         })
 
-        // 生成文件名（清理非法字符）
-        const safeName = sessionInfo.displayName.replace(/[<>:"\/\\|?*]/g, '_')
+        // 生成文件名（清理非法字符，移除末尾的"."以避免Windows无法识别文件夹）
+        const safeName = sessionInfo.displayName.replace(/[<>:"\/\\|?*]/g, '_').replace(/\.+$/, '').trim()
         let ext = '.json'
         if (options.format === 'chatlab-jsonl') ext = '.jsonl'
         else if (options.format === 'excel') ext = '.xlsx'

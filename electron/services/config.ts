@@ -59,6 +59,9 @@ interface ConfigSchema {
   httpApiPort: number
   httpApiToken: string
 
+  // 窗口关闭行为
+  closeToTray: boolean
+
   // AI 相关
   aiCurrentProvider: string  // 当前选中的提供商
   aiProviderConfigs: {  // 每个提供商的独立配置
@@ -107,6 +110,7 @@ const defaults: ConfigSchema = {
   httpApiEnabled: false,
   httpApiPort: 5031,
   httpApiToken: '',
+  closeToTray: true,  // 默认最小化到托盘
   // AI 默认配置
   aiCurrentProvider: 'zhipu',
   aiProviderConfigs: {},  // 空对象，用户配置后填充
