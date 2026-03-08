@@ -12,6 +12,12 @@ export class ShortcutService {
     async updateDesktopShortcutIcon(iconPath: string): Promise<{ success: boolean; error?: string }> {
         return new Promise((resolve) => {
             try {
+                if (process.platform !== 'win32') {
+                    // 只在 Windows 上支持更新快捷方式图标
+                    resolve({ success: false, error: 'Not supported on non-Windows platforms' })
+                    return
+                }
+
                 if (!existsSync(iconPath)) {
                     resolve({ success: false, error: '图标文件不存在' })
                     return

@@ -87,6 +87,11 @@
       "target": "nsis",
       "requestedExecutionLevel": "asInvoker"
     },
+    "mac": {
+      "target": "dmg",
+      "icon": "public/icon.icns",
+      "category": "public.app-category.utilities"
+    },
     "nsis": {
       "differentialPackage": false,
       "oneClick": false,
@@ -144,8 +149,8 @@
       "!node_modules/**/*.so",
       "!node_modules/**/*.dylib",
       "!node_modules/**/*.a",
-      "!node_modules/sherpa-onnx-node/bin/!(win-x64)/**/*",
-      "!node_modules/ffmpeg-static/bin/!(win32-x64)/**/*",
+      "!node_modules/sherpa-onnx-node/bin/!(${os}-${arch})/**/*",
+      "!node_modules/ffmpeg-static/bin/!(${os}-${arch})/**/*",
       "!node_modules/**/*.obj",
       "!node_modules/**/*.pdb",
       "!node_modules/**/*.lib",

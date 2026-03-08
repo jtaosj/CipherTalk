@@ -12,6 +12,12 @@ import { wcdbService } from './services/wcdbService'
 import { dataManagementService } from './services/dataManagementService'
 import { imageDecryptService } from './services/imageDecryptService'
 import { imageKeyService } from './services/imageKeyService'  // 内存扫描兜底方案
+
+// macOS 专用服务
+import { macWxKeyService } from './services/macWxKeyService'
+import { macDecryptService } from './services/macDecryptService'
+
+const isMac = process.platform === 'darwin'
 import { chatService } from './services/chatService'
 import { analyticsService } from './services/analyticsService'
 import { groupAnalyticsService } from './services/groupAnalyticsService'
@@ -243,12 +249,12 @@ function createWindow() {
 
     // 获取关闭行为配置
     const closeToTray = configService?.get('closeToTray')
-    
+
     // 如果配置为关闭到托盘（默认为 true）
     if (closeToTray !== false) {
       event.preventDefault()
       win.hide()
-      
+
       // 确保托盘已创建
       if (!tray) {
         createTray()
@@ -1388,17 +1394,17 @@ function registerIpcHandlers() {
       options?: { sessionId?: string; imageMd5?: string; imageDatName?: string }
     ) => {
       const win = createImageViewerWindow(imagePath, liveVideoPath, options)
-    if (imageList && imageList.length > 1) {
-      const currentIndex = imageList.findIndex(item => item.imagePath === imagePath)
-      win.webContents.once('did-finish-load', () => {
-        if (!win.isDestroyed()) {
-          win.webContents.send('imageViewer:setImageList', {
-            imageList,
-            currentIndex: currentIndex >= 0 ? currentIndex : 0
-          })
-        }
-      })
-    }
+      if (imageList && imageList.length > 1) {
+        const currentIndex = imageList.findIndex(item => item.imagePath === imagePath)
+        win.webContents.once('did-finish-load', () => {
+          if (!win.isDestroyed()) {
+            win.webContents.send('imageViewer:setImageList', {
+              imageList,
+              currentIndex: currentIndex >= 0 ? currentIndex : 0
+            })
+          }
+        })
+      }
     }
   )
 
@@ -1504,124 +1510,230 @@ function registerIpcHandlers() {
 
   // 密钥获取相关
   ipcMain.handle('wxkey:isWeChatRunning', async () => {
+    if (isMac) return macWxKeyService.isWeChatRunning()
     return wxKeyService.isWeChatRunning()
   })
 
   ipcMain.handle('wxkey:getWeChatPid', async () => {
+    if (isMac) return macWxKeyService.getWeChatPid()
     return wxKeyService.getWeChatPid()
   })
 
   ipcMain.handle('wxkey:killWeChat', async () => {
+    if (isMac) return macWxKeyService.killWeChat()
     return wxKeyService.killWeChat()
   })
 
   ipcMain.handle('wxkey:launchWeChat', async () => {
+    if (isMac) return macWxKeyService.launchWeChat()
     return wxKeyService.launchWeChat()
   })
 
   ipcMain.handle('wxkey:waitForWindow', async (_, maxWaitSeconds?: number) => {
+    if (isMac) return macWxKeyService.waitForWeChatWindow(maxWaitSeconds)
     return wxKeyService.waitForWeChatWindow(maxWaitSeconds)
   })
 
   ipcMain.handle('wxkey:startGetKey', async (event, customWechatPath?: string) => {
-    logService?.info('WxKey', '开始获取微信密钥', { customWechatPath })
-    try {
-      // 初始化 DLL
-      const initSuccess = await wxKeyService.initialize()
-      if (!initSuccess) {
-        logService?.error('WxKey', 'DLL 初始化失败')
-        return { success: false, error: 'DLL 初始化失败' }
-      }
+    logService?.info('WxKey', '开始获取微信密钥', { customWechatPath, platform: process.platform })
 
-      // 检查微信是否已运行，如果运行则先关闭
-      if (wxKeyService.isWeChatRunning()) {
-        logService?.info('WxKey', '检测到微信正在运行，准备关闭')
-        event.sender.send('wxkey:status', { status: '检测到微信正在运行，准备关闭...', level: 1 })
-        wxKeyService.killWeChat()
-        await new Promise(resolve => setTimeout(resolve, 2000))
-      }
-
-      // 发送状态：准备启动微信
-      event.sender.send('wxkey:status', { status: '正在安装 Hook...', level: 1 })
-
-      // 获取微信路径
-      const wechatPath = customWechatPath || wxKeyService.getWeChatPath()
-      if (!wechatPath) {
-        logService?.error('WxKey', '未找到微信安装路径')
-        return { success: false, error: '未找到微信安装路径', needManualPath: true }
-      }
-
-      logService?.info('WxKey', '找到微信路径', { wechatPath })
-      event.sender.send('wxkey:status', { status: 'Hook 安装成功，正在启动微信...', level: 1 })
-
-      // 启动微信
-      const launchSuccess = await wxKeyService.launchWeChat(customWechatPath)
-      if (!launchSuccess) {
-        logService?.error('WxKey', '启动微信失败')
-        return { success: false, error: '启动微信失败' }
-      }
-
-      // 等待微信进程出现
-      event.sender.send('wxkey:status', { status: '等待微信进程启动...', level: 1 })
-      const windowAppeared = await wxKeyService.waitForWeChatWindow(15)
-      if (!windowAppeared) {
-        logService?.error('WxKey', '微信进程启动超时')
-        return { success: false, error: '微信进程启动超时' }
-      }
-
-      // 获取微信 PID
-      const pid = wxKeyService.getWeChatPid()
-      if (!pid) {
-        logService?.error('WxKey', '未找到微信进程')
-        return { success: false, error: '未找到微信进程' }
-      }
-
-      logService?.info('WxKey', '找到微信进程', { pid })
-      event.sender.send('wxkey:status', { status: '正在注入 Hook...', level: 1 })
-
-      // 创建 Promise 等待密钥
-      return new Promise((resolve) => {
-        const timeout = setTimeout(() => {
-          wxKeyService.dispose()
-          logService?.error('WxKey', '获取密钥超时')
-          resolve({ success: false, error: '获取密钥超时' })
-        }, 60000)
-
-        const success = wxKeyService.installHook(
-          pid,
-          (key) => {
-            clearTimeout(timeout)
-            wxKeyService.dispose()
-            logService?.info('WxKey', '密钥获取成功', { keyLength: key.length })
-            resolve({ success: true, key })
-          },
-          (status, level) => {
-            // 发送状态到渲染进程
-            event.sender.send('wxkey:status', { status, level })
-          }
-        )
-
-        if (!success) {
-          clearTimeout(timeout)
-          const error = wxKeyService.getLastError()
-          wxKeyService.dispose()
-          logService?.error('WxKey', 'Hook 安装失败', { error })
-          resolve({ success: false, error: `Hook 安装失败: ${error}` })
+    if (isMac) {
+      // ─────── macOS: 内存扫描方案 ───────
+      try {
+        // 初始化 dylib
+        const initSuccess = await macWxKeyService.initialize()
+        if (!initSuccess) {
+          logService?.error('WxKey', 'dylib 初始化失败')
+          return { success: false, error: 'dylib 初始化失败，请检查 mac_wx_key.dylib 是否存在' }
         }
-      })
-    } catch (e) {
-      wxKeyService.dispose()
-      logService?.error('WxKey', '获取密钥异常', { error: String(e) })
-      return { success: false, error: String(e) }
+
+        // macOS 要求微信已运行且已登录
+        if (!macWxKeyService.isWeChatRunning()) {
+          event.sender.send('wxkey:status', { status: '微信未运行，正在启动...', level: 1 })
+          await macWxKeyService.launchWeChat()
+          const appeared = await macWxKeyService.waitForWeChatWindow(15)
+          if (!appeared) {
+            return { success: false, error: '微信启动超时，请手动启动微信并登录后重试' }
+          }
+        }
+
+        event.sender.send('wxkey:status', { status: '请确保微信已登录，正在准备扫描...', level: 1 })
+        await new Promise(resolve => setTimeout(resolve, 2000))
+
+        // 自动检测 db_storage 目录
+        const detectResult = await dbPathService.autoDetect()
+        if (!detectResult.success || !detectResult.path) {
+          return { success: false, error: '未找到微信数据库目录，请手动指定' }
+        }
+
+        // 找 db_storage 子目录
+        const { readdirSync, existsSync: fsExists, statSync: fsStat } = require('fs')
+        const { join: pathJoin } = require('path')
+        let dbStorageDir: string | null = null
+
+        const entries = readdirSync(detectResult.path, { withFileTypes: true }) as Array<{ isDirectory(): boolean; name: string }>
+        for (const entry of entries) {
+          if (!entry.isDirectory()) continue
+          const candidate = pathJoin(detectResult.path, entry.name, 'db_storage')
+          if (fsExists(candidate)) {
+            dbStorageDir = candidate
+            break  // 取第一个匹配的（最可能是当前登录账号）
+          }
+        }
+
+        if (!dbStorageDir) {
+          return { success: false, error: '未找到 db_storage 目录' }
+        }
+
+        logService?.info('WxKey', '找到 db_storage', { dbStorageDir })
+        event.sender.send('wxkey:status', { status: '正在扫描微信内存提取密钥...', level: 1 })
+
+        // 启动扫描
+        return new Promise((resolve) => {
+          const timeout = setTimeout(() => {
+            macWxKeyService.cancelScan()
+            macWxKeyService.dispose()
+            logService?.error('WxKey', '扫描超时')
+            resolve({ success: false, error: '密钥扫描超时' })
+          }, 120000) // macOS 内存扫描可能较慢，放宽到 120s
+
+          const scanStarted = macWxKeyService.startKeyScan(
+            dbStorageDir!,
+            (keys) => {
+              clearTimeout(timeout)
+              macWxKeyService.dispose()
+              const keyCount = Object.keys(keys).length
+              logService?.info('WxKey', 'macOS 密钥扫描成功', { keyCount })
+
+              // macOS 返回的是 keys 映射（多个 DB 对应多个 key）
+              // 取第一个 key 作为主密钥（大部分 DB 共享同一个 key）
+              const firstKey = Object.values(keys)[0] || ''
+              resolve({ success: true, key: firstKey, allKeys: keys })
+            },
+            (status, level) => {
+              event.sender.send('wxkey:status', { status, level })
+            }
+          )
+
+          if (!scanStarted) {
+            clearTimeout(timeout)
+            const error = macWxKeyService.getLastError()
+            macWxKeyService.dispose()
+            logService?.error('WxKey', '扫描启动失败', { error })
+            resolve({ success: false, error: `扫描启动失败: ${error}` })
+          }
+        })
+      } catch (e) {
+        macWxKeyService.dispose()
+        logService?.error('WxKey', 'macOS 获取密钥异常', { error: String(e) })
+        return { success: false, error: String(e) }
+      }
+    } else {
+      // ─────── Windows: DLL Hook 方案 ───────
+      try {
+        // 初始化 DLL
+        const initSuccess = await wxKeyService.initialize()
+        if (!initSuccess) {
+          logService?.error('WxKey', 'DLL 初始化失败')
+          return { success: false, error: 'DLL 初始化失败' }
+        }
+
+        // 检查微信是否已运行，如果运行则先关闭
+        if (wxKeyService.isWeChatRunning()) {
+          logService?.info('WxKey', '检测到微信正在运行，准备关闭')
+          event.sender.send('wxkey:status', { status: '检测到微信正在运行，准备关闭...', level: 1 })
+          wxKeyService.killWeChat()
+          await new Promise(resolve => setTimeout(resolve, 2000))
+        }
+
+        // 发送状态：准备启动微信
+        event.sender.send('wxkey:status', { status: '正在安装 Hook...', level: 1 })
+
+        // 获取微信路径
+        const wechatPath = customWechatPath || wxKeyService.getWeChatPath()
+        if (!wechatPath) {
+          logService?.error('WxKey', '未找到微信安装路径')
+          return { success: false, error: '未找到微信安装路径', needManualPath: true }
+        }
+
+        logService?.info('WxKey', '找到微信路径', { wechatPath })
+        event.sender.send('wxkey:status', { status: 'Hook 安装成功，正在启动微信...', level: 1 })
+
+        // 启动微信
+        const launchSuccess = await wxKeyService.launchWeChat(customWechatPath)
+        if (!launchSuccess) {
+          logService?.error('WxKey', '启动微信失败')
+          return { success: false, error: '启动微信失败' }
+        }
+
+        // 等待微信进程出现
+        event.sender.send('wxkey:status', { status: '等待微信进程启动...', level: 1 })
+        const windowAppeared = await wxKeyService.waitForWeChatWindow(15)
+        if (!windowAppeared) {
+          logService?.error('WxKey', '微信进程启动超时')
+          return { success: false, error: '微信进程启动超时' }
+        }
+
+        // 获取微信 PID
+        const pid = wxKeyService.getWeChatPid()
+        if (!pid) {
+          logService?.error('WxKey', '未找到微信进程')
+          return { success: false, error: '未找到微信进程' }
+        }
+
+        logService?.info('WxKey', '找到微信进程', { pid })
+        event.sender.send('wxkey:status', { status: '正在注入 Hook...', level: 1 })
+
+        // 创建 Promise 等待密钥
+        return new Promise((resolve) => {
+          const timeout = setTimeout(() => {
+            wxKeyService.dispose()
+            logService?.error('WxKey', '获取密钥超时')
+            resolve({ success: false, error: '获取密钥超时' })
+          }, 60000)
+
+          const success = wxKeyService.installHook(
+            pid,
+            (key) => {
+              clearTimeout(timeout)
+              wxKeyService.dispose()
+              logService?.info('WxKey', '密钥获取成功', { keyLength: key.length })
+              resolve({ success: true, key })
+            },
+            (status, level) => {
+              // 发送状态到渲染进程
+              event.sender.send('wxkey:status', { status, level })
+            }
+          )
+
+          if (!success) {
+            clearTimeout(timeout)
+            const error = wxKeyService.getLastError()
+            wxKeyService.dispose()
+            logService?.error('WxKey', 'Hook 安装失败', { error })
+            resolve({ success: false, error: `Hook 安装失败: ${error}` })
+          }
+        })
+      } catch (e) {
+        wxKeyService.dispose()
+        logService?.error('WxKey', '获取密钥异常', { error: String(e) })
+        return { success: false, error: String(e) }
+      }
     }
   })
 
   ipcMain.handle('wxkey:cancel', async () => {
-    wxKeyService.dispose()
+    if (isMac) {
+      macWxKeyService.cancelScan()
+      macWxKeyService.dispose()
+    } else {
+      wxKeyService.dispose()
+    }
     return true
   })
 
   ipcMain.handle('wxkey:detectCurrentAccount', async (_, dbPath?: string, maxTimeDiffMinutes?: number) => {
+    if (isMac) return macWxKeyService.detectCurrentAccount(dbPath, maxTimeDiffMinutes)
     return wxKeyService.detectCurrentAccount(dbPath, maxTimeDiffMinutes)
   })
 
@@ -3820,7 +3932,7 @@ app.whenReady().then(async () => {
   if (shouldShowSplash !== false || configService?.get('myWxid')) {
     // 创建主窗口（但不立即显示）
     mainWindow = createWindow()
-    
+
     // 创建系统托盘
     createTray()
   }
@@ -3852,13 +3964,13 @@ app.on('window-all-closed', () => {
 app.on('before-quit', () => {
   // 设置退出标志
   app.isQuitting = true
-  
+
   httpApiService.stop().catch((e) => {
     console.error('[HttpApi] 停止失败:', e)
   })
   // 关闭配置数据库连接
   configService?.close()
-  
+
   // 销毁托盘
   if (tray) {
     tray.destroy()

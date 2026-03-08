@@ -11,10 +11,15 @@ export class DbPathService {
       const possiblePaths: string[] = []
       const home = homedir()
 
-      // 微信4.x 数据目录
-      possiblePaths.push(join(home, 'Documents', 'xwechat_files'))
-      // 旧版微信数据目录
-      possiblePaths.push(join(home, 'Documents', 'WeChat Files'))
+      if (process.platform === 'darwin') {
+        // macOS 微信4.x 数据目录
+        possiblePaths.push(join(home, 'Library', 'Containers', 'com.tencent.xinWeChat', 'Data', 'Documents', 'xwechat_files'))
+      } else {
+        // Windows 微信4.x 数据目录
+        possiblePaths.push(join(home, 'Documents', 'xwechat_files'))
+        // 旧版微信数据目录
+        possiblePaths.push(join(home, 'Documents', 'WeChat Files'))
+      }
 
       for (const path of possiblePaths) {
         if (existsSync(path)) {
@@ -22,7 +27,7 @@ export class DbPathService {
           if (rootName !== 'xwechat_files' && rootName !== 'wechat files') {
             continue
           }
-          
+
           // 检查是否有有效的账号目录
           const accounts = this.findAccountDirs(path)
           if (accounts.length > 0) {
@@ -42,14 +47,14 @@ export class DbPathService {
    */
   findAccountDirs(rootPath: string): string[] {
     const accounts: string[] = []
-    
+
     try {
       const entries = readdirSync(rootPath)
-      
+
       for (const entry of entries) {
         const entryPath = join(rootPath, entry)
         const stat = statSync(entryPath)
-        
+
         if (stat.isDirectory()) {
           // 检查是否有 db_storage 子目录
           const dbStoragePath = join(entryPath, 'db_storage')
@@ -58,8 +63,8 @@ export class DbPathService {
           }
         }
       }
-    } catch {}
-    
+    } catch { }
+
     return accounts
   }
 
@@ -75,8 +80,8 @@ export class DbPathService {
       // 直接返回所有包含 db_storage 的账号目录
       // 不再限制 wxid 格式，因为微信账号目录名称格式多样
       return this.findAccountDirs(rootPath)
-    } catch {}
-    
+    } catch { }
+
     return []
   }
 
@@ -85,6 +90,9 @@ export class DbPathService {
    */
   getDefaultPath(): string {
     const home = homedir()
+    if (process.platform === 'darwin') {
+      return join(home, 'Library', 'Containers', 'com.tencent.xinWeChat', 'Data', 'Documents', 'xwechat_files')
+    }
     return join(home, 'Documents', 'xwechat_files')
   }
 }

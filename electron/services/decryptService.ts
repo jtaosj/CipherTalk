@@ -1,4 +1,7 @@
 import { nativeDecryptService } from './nativeDecryptService'
+import { macDecryptService } from './macDecryptService'
+
+const isMac = process.platform === 'darwin'
 
 /**
  * 微信数据库解密服务 (Windows v4)
@@ -26,18 +29,26 @@ export class WeChatDecryptService {
   ): Promise<{ success: boolean; error?: string }> {
 
     // 检查服务是否可用
-    if (!nativeDecryptService.isAvailable()) {
-      return { success: false, error: '原生解密服务不可用：DLL 加载失败或 Worker 未启动' }
+    if (isMac) {
+      if (!macDecryptService.isAvailable()) {
+        return { success: false, error: 'macOS 原生解密服务不可用：dylib 加载失败或 Worker 未启动' }
+      }
+    } else {
+      if (!nativeDecryptService.isAvailable()) {
+        return { success: false, error: 'Windows 原生解密服务不可用：DLL 加载失败或 Worker 未启动' }
+      }
     }
 
     try {
-      // console.log(`[Decrypt] 开始解密: ${inputPath} -> ${outputPath}`) // 减少日志
-
-      // 使用异步 DLL 解密
-      const result = await nativeDecryptService.decryptDatabaseAsync(inputPath, outputPath, hexKey, onProgress)
+      // 使用异步解密
+      let result
+      if (isMac) {
+        result = await macDecryptService.decryptDatabaseAsync(inputPath, outputPath, hexKey, onProgress)
+      } else {
+        result = await nativeDecryptService.decryptDatabaseAsync(inputPath, outputPath, hexKey, onProgress)
+      }
 
       if (result.success) {
-        // console.log('[Decrypt] 解密成功') // 减少日志
         return { success: true }
       } else {
         console.warn(`[Decrypt] 解密失败: ${result.error}`)
