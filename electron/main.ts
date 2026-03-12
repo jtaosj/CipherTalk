@@ -243,18 +243,25 @@ function createWindow() {
 
     // 获取关闭行为配置
     const closeToTray = configService?.get('closeToTray')
-    
+
     // 如果配置为关闭到托盘（默认为 true）
     if (closeToTray !== false) {
       event.preventDefault()
       win.hide()
-      
+
       // 确保托盘已创建
       if (!tray) {
         createTray()
       }
+
+      return
     }
-    // 否则允许窗口关闭，应用退出
+
+    // 配置为直接退出时，需要显式退出应用。
+    // 否则主窗口关闭后托盘仍然存在，进程不会真正结束。
+    event.preventDefault()
+    app.isQuitting = true
+    app.quit()
   })
 
   // 开发环境加载 vite 服务器
