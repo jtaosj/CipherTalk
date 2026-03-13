@@ -42,6 +42,7 @@
     "koffi": "^2.9.0",
     "lucide-react": "^0.562.0",
     "marked": "^17.0.1",
+    "motion": "^12.35.2",
     "onnxruntime-node": "^1.23.2",
     "openai": "^4.70.0",
     "react": "^19.2.3",

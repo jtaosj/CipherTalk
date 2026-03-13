@@ -552,8 +552,9 @@ function OpenApiPage() {
 
   return (
     <>
-      <Box sx={{ height: '100%', overflowY: 'auto', pb: 3 }}>
-        <Container maxWidth="lg" sx={{ px: { xs: 2, md: 3 }, py: 3 }}>
+      {/* 独立页面布局：抵消 App 主内容区的 padding，完整占据空间 */}
+      <Box sx={{ height: '100%', mx: -3, mt: -3, overflowY: 'auto', pb: 3 }}>
+        <Container maxWidth="lg" sx={{ px: { xs: 2, md: 4 }, py: { xs: 3, md: 4 } }}>
           <Stack spacing={3}>
             <Box>
               <Stack
