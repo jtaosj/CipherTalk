@@ -878,10 +878,19 @@ body {
     return 'c' + (Math.abs(hash) % 8);
   }
 
+  // HTML 实体解码（防止导出数据中残留 &#x20; 等转义字符）
+  function decodeEntities(text) {
+    if (!text) return '';
+    const d = document.createElement('textarea');
+    d.innerHTML = text;
+    return d.value;
+  }
+
   // HTML 转义
   function esc(text) {
+    const decoded = decodeEntities(String(text || ''));
     const d = document.createElement('div');
-    d.textContent = text;
+    d.textContent = decoded;
     return d.innerHTML;
   }
 

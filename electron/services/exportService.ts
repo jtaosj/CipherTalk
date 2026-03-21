@@ -301,13 +301,24 @@ class ExportService {
       const tables = db.prepare(
         "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'Msg_%'"
       ).all() as any[]
-      const hash = this.getTableNameHash(sessionId)
+      const hash = this.getTableNameHash(sessionId).toLowerCase()
+      // 1. 精确哈希提取匹配（大小写无关）：从表名中提取 32 位 hex 片段后比对
       for (const table of tables) {
-        if ((table.name as string).includes(hash)) {
-          return table.name
+        const name = table.name as string
+        const hexMatch = name.match(/[0-9a-fA-F]{32}/)
+        if (hexMatch && hexMatch[0].toLowerCase() === hash) {
+          return name
+        }
+      }
+      // 2. 包含匹配（大小写无关）
+      for (const table of tables) {
+        const name = table.name as string
+        if (name.toLowerCase().includes(hash)) {
+          return name
         }
       }
     } catch { }
+    // 匹配失败时返回 null，不回退到第一个表（避免数据串）
     return null
   }
 
@@ -1137,6 +1148,9 @@ class ExportService {
         const fileext = this.extractXmlValue(body, 'fileext')
         const datasize = parseInt(this.extractXmlValue(body, 'datasize') || '0')
 
+        // 过滤红包（2001）和群收款（2002）消息，不在导出中显示
+        if (datatype === 2001 || datatype === 2002) continue
+
         items.push({
           datatype,
           sourcename,
@@ -1168,6 +1182,15 @@ class ExportService {
       .replace(/&quot;/g, '"')
       .replace(/&#39;/g, "'")
       .replace(/&apos;/g, "'")
+      // 常见十六进制数字实体
+      .replace(/&#x20;/gi, ' ')
+      .replace(/&#x0A;/gi, '\n')
+      .replace(/&#x09;/gi, '\t')
+      .replace(/&#xD;/gi, '\r')
+      // 通用十六进制实体 &#xHH;
+      .replace(/&#x([0-9a-fA-F]+);/g, (_, hex) => String.fromCodePoint(parseInt(hex, 16)))
+      // 通用十进制实体 &#NN;
+      .replace(/&#(\d+);/g, (_, dec) => String.fromCodePoint(parseInt(dec, 10)))
   }
 
   /**
@@ -1230,11 +1253,18 @@ class ExportService {
           content = record.datadesc || record.datatitle || '[消息]'
       }
 
+      // 对关键字段进行 HTML 实体解码，防止导出时出现 &#x20; 等转义字符
+      content = this.decodeHtmlEntities(content)
+      const senderDisplayName = this.decodeHtmlEntities(record.sourcename || 'unknown')
+      const formattedTime = this.decodeHtmlEntities(
+        timestamp > 0 ? this.formatTimestamp(timestamp) : (record.sourcetime || '')
+      )
+
       const chatRecord: any = {
         sender: record.sourcename || 'unknown',
-        senderDisplayName: record.sourcename || 'unknown',
+        senderDisplayName,
         timestamp,
-        formattedTime: timestamp > 0 ? this.formatTimestamp(timestamp) : record.sourcetime,
+        formattedTime,
         type: typeName,
         datatype: record.datatype,
         content

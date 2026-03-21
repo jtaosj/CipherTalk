@@ -14,6 +14,9 @@ const external = [
 
 export default defineConfig({
   base: './',
+  optimizeDeps: {
+    entries: ['index.html']
+  },
   server: {
     port: 3000,
     strictPort: false  // 如果3000被占用，自动尝试下一个

@@ -747,6 +747,12 @@ function MomentsWindow() {
   const [isLoading, setIsLoading] = useState(true)
   const [loadingNewer, setLoadingNewer] = useState(false)
   const [posts, setPosts] = useState<SnsPost[]>([])
+  const postsRef = useRef<SnsPost[]>([])
+
+  // 同步 postsRef 与 posts state
+  useEffect(() => {
+    postsRef.current = posts
+  }, [posts])
   const [deletedPostIds, setDeletedPostIds] = useState<Set<string>>(new Set())
   const [error, setError] = useState<string | null>(null)
 
@@ -877,7 +883,7 @@ function MomentsWindow() {
         }
         currentOffset = 0
       } else if (direction === 'newer') {
-        const topPost = posts[0]
+        const topPost = postsRef.current[0]
         if (topPost) {
           startTs = topPost.createTime + 1
         }
@@ -885,7 +891,7 @@ function MomentsWindow() {
         endTs = undefined // Ensure endTs is cleared for newer posts check
       } else {
         // Load older
-        currentOffset = posts.length
+        currentOffset = postsRef.current.length
 
         // Maintain jumpTargetDate filter if active
         if (jumpTargetDate) {
@@ -946,7 +952,7 @@ function MomentsWindow() {
       setLoadingNewer(false)
       loadingRef.current = false
     }
-  }, [posts, selectedUsernames, searchKeyword, jumpTargetDate])
+  }, [selectedUsernames, searchKeyword, jumpTargetDate])
 
   // 监听筛选条件变化，自动重置加载
   useEffect(() => {
