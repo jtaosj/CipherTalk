@@ -88,6 +88,120 @@
   }
 }
 
+.force-update-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 5000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(6, 10, 16, 0.82);
+  backdrop-filter: blur(14px);
+}
+
+.force-update-card {
+  width: min(720px, 100%);
+  max-height: 85vh;
+  overflow: auto;
+  padding: 28px;
+  border-radius: 20px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: var(--bg-secondary);
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.35);
+
+  h2 {
+    margin: 16px 0 10px;
+    font-size: 28px;
+    font-weight: 700;
+    color: var(--text-primary);
+  }
+
+  .force-update-desc {
+    margin: 0 0 18px;
+    color: var(--text-secondary);
+    line-height: 1.7;
+  }
+
+  .force-update-meta {
+    display: grid;
+    gap: 8px;
+    margin-bottom: 18px;
+    padding: 14px 16px;
+    border-radius: 14px;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    font-size: 14px;
+  }
+
+  .force-update-notes {
+    margin-bottom: 18px;
+    padding: 14px 16px;
+    border-radius: 14px;
+    background: var(--bg-primary);
+
+    .force-update-notes-title {
+      margin-bottom: 10px;
+      font-weight: 600;
+      color: var(--text-primary);
+    }
+
+    pre {
+      margin: 0;
+      white-space: pre-wrap;
+      word-break: break-word;
+      color: var(--text-secondary);
+      font-family: inherit;
+      line-height: 1.6;
+    }
+  }
+
+  .force-update-progress {
+    margin-bottom: 18px;
+  }
+
+  .force-update-progress-label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 10px;
+    color: var(--text-primary);
+    font-size: 14px;
+    font-weight: 600;
+  }
+
+  .force-update-progress-bar {
+    height: 10px;
+    border-radius: 999px;
+    background: var(--bg-primary);
+    overflow: hidden;
+  }
+
+  .force-update-progress-fill {
+    height: 100%;
+    border-radius: inherit;
+    background: linear-gradient(90deg, #ff7849 0%, #ff4747 100%);
+  }
+
+  .force-update-actions {
+    display: flex;
+    gap: 12px;
+    justify-content: flex-end;
+  }
+}
+
+.force-update-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: 999px;
+  background: rgba(255, 92, 92, 0.12);
+  color: #ff5c5c;
+  font-size: 13px;
+  font-weight: 700;
+}
+
 // 独立聊天窗口容器
 .chat-window-container {
   height: 100vh;

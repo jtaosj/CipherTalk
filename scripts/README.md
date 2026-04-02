@@ -1,336 +1,176 @@
-# 📦 自动发布脚本使用说明
+# 📦 发布说明
 
-## 🚀 快速开始
+## 触发方式
 
-### 发布新版本（3 步完成）
+当前仓库不再使用本地 `npm run tuisong` 发布。
 
-```bash
-# 1. 修改 package.json 中的版本号
-#    "version": "2.0.4"
+正式发布方式改为：
 
-# 2. 提交所有更改
-git add .
-git commit -m "release: v2.0.4"
-
-# 3. 运行发布脚本
-npm run tuisong
-```
-
-就这么简单！脚本会自动：
-- ✅ 检查是否有未提交的更改（有则报错）
-- ✅ 读取 `package.json` 中的版本号
-- ✅ 推送到 GitHub
-- ✅ 创建并推送版本标签（如 `v2.0.4`）
-- ✅ 触发自动构建和发布
-
----
-
-## 📝 使用方法
+1. 修改 `package.json` 中的版本号
+2. 提交代码并推送到 `main`
+3. 推送一个与版本号完全一致的 Git tag，例如：
 
 ```bash
-npm run tuisong
+git tag v2.2.14
+git push origin v2.2.14
 ```
 
-**前提条件：**
-- ✅ 所有更改已提交（`git commit`）
-- ✅ `package.json` 中的版本号已更新
+只有推送 `v*` 标签时，GitHub Actions 才会自动构建和发布。
 
-**脚本会做什么：**
-1. 检查是否有未提交的更改（有则退出）
-2. 显示待推送的提交
-3. 推送到 GitHub
-4. 创建版本标签（如 `v2.0.4`）
-5. 推送标签到 GitHub
+## GitHub Actions 会做什么
 
----
+`.github/workflows/release.yml` 会在 `v*` 标签触发后执行：
 
-## 🎯 完整发布流程
+当前工作流已拆成串并行 job：
 
-### 步骤 1：修改版本号
+- `prepare-meta`
+- `build-windows`
+- `generate-release-body`
+- `publish-github-release`
+- `mirror-r2`
+- `notify-telegram-success`
+- `notify-failure`
 
-编辑 `package.json`：
+其中：
 
-```json
-{
-  "name": "ciphertalk",
-  "version": "2.0.4",  // 修改这里
-  ...
-}
-```
+1. `prepare-meta` 生成 `force-update.json` 和 `release-context.json`
+2. `build-windows` 负责构建安装包、`latest.yml` 和 `*.blockmap`
+3. `generate-release-body` 负责 AI / 模板版发布说明
+4. `publish-github-release` 汇总产物并创建 GitHub Release
+5. `mirror-r2` 与 `notify-telegram-success` 在发布成功后并行执行
 
-**版本号规范：**
-- **patch (x.y.Z)** - 修复 bug：`2.0.3` → `2.0.4`
-- **minor (x.Y.z)** - 新增功能：`2.0.3` → `2.1.0`
-- **major (X.y.z)** - 重大更新：`2.0.3` → `3.0.0`
+GitHub Release 上传内容：
 
-### 步骤 2：提交更改
+- 安装包
+- `latest.yml`
+- `force-update.json`
+- `*.blockmap`（必需）
+
+Cloudflare R2 同步内容：
+
+- 安装包
+- `latest.yml`
+- `force-update.json`
+- `*.blockmap`
+
+Telegram 通知：
+
+- 成功时发送 AI 摘要通知
+- 失败时发送失败通知
+
+GitHub Release 资产包括：
+   - 安装包
+   - `latest.yml`
+   - `force-update.json`
+   - `*.blockmap`
+10. 向 Telegram 频道/群发送发布通知（AI 摘要 + 强制更新提醒）
+
+## Windows 差分更新
+
+当前 Windows 自动更新已启用差分下载。
+
+依赖产物为：
+
+- `CipherTalk-x.y.z-Setup.exe`
+- `latest.yml`
+- 至少一个 `*.blockmap`
+
+工作流会在构建、GitHub Release 发布、R2 镜像同步阶段强校验 `*.blockmap` 是否存在；缺失时直接失败，避免退回全量更新而未被发现。
+
+说明：
+
+- 当前仍是未签名发布
+- 未签名状态下差分更新可以工作
+- 公开分发时稳定性仍可能受 SmartScreen / 杀软 / 系统策略影响
+- 若差分下载失败，`electron-updater` 应回退到完整包更新，不修改现有 UI 交互
+
+## 版本要求
+
+标签名必须与 `package.json.version` 完全对应：
+
+- `package.json.version = 2.2.14`
+- Git tag 必须是 `v2.2.14`
+
+如果不一致，工作流会直接失败。
+
+## 强制更新策略
+
+工作流会调用：
 
 ```bash
-git add .
-git commit -m "release: v2.0.4"
+npm run build:force-update-manifest
 ```
 
-### 步骤 3：推送发布
+默认情况下不会触发强制更新。只有在仓库 Variables / Secrets 中提供以下值时，生成的 `force-update.json` 才会带上对应策略：
 
-```bash
-npm run tuisong
-```
+- `FORCE_UPDATE_MIN_VERSION`
+- `FORCE_UPDATE_BLOCKED_VERSIONS`
+- `FORCE_UPDATE_TITLE`
+- `FORCE_UPDATE_MESSAGE`
+- `FORCE_UPDATE_RELEASE_NOTES`
 
-脚本会显示：
-```
-================================
-  密语 - 自动发布脚本
-================================
+## Secrets / Variables
 
-📌 当前版本: v2.0.4
+### Cloudflare R2 Secrets
 
-📝 待推送的提交:
-abc1234 release: v2.0.4
+需要在 GitHub 仓库配置以下 Secrets：
 
-[1/2] 🚀 推送到 GitHub...
-  ✓ 推送成功
+- `R2_ACCOUNT_ID`
+- `R2_BUCKET_NAME`
+- `R2_ACCESS_KEY_ID`
+- `R2_SECRET_ACCESS_KEY`
 
-[2/2] 🏷️  创建并推送标签 v2.0.4...
-  ✓ 标签创建成功
+### 可选强制更新 Variables / Secrets
 
-================================
-  ✅ 发布流程已启动！
-================================
+可以按需配置：
 
-📦 版本: v2.0.4
+- `FORCE_UPDATE_MIN_VERSION`
+- `FORCE_UPDATE_BLOCKED_VERSIONS`
+- `FORCE_UPDATE_TITLE`
+- `FORCE_UPDATE_MESSAGE`
+- `FORCE_UPDATE_RELEASE_NOTES`
 
-🔗 查看构建进度:
-   https://github.com/JiQingzhe2004/ciphertalk/actions
+不配置时，`force-update.json` 仍会生成，但只包含当前版本信息，不会强制用户升级。
 
-🔗 发布完成后访问:
-   https://github.com/JiQingzhe2004/ciphertalk/releases/tag/v2.0.4
+### AI Release Body 配置
 
-⏱️  预计 10-15 分钟后构建完成
-```
+发布工作流会自动生成标准化 Release body。
 
-### 步骤 4：等待构建完成
+需要在 GitHub Environment `软件发布` 中配置：
 
-GitHub Actions 会自动：
-1. 安装依赖
-2. 重新编译原生模块
-3. 构建美化安装包
-4. 创建 GitHub Release
-5. 上传到 Cloudflare R2
-6. 上传 `CipherTalk-2.0.4-Setup.exe`
+- `AI_API_KEY`
+- `AI_API_URL`（可选）
+- `AI_MODEL`（可选）
 
----
+用途：
+- 默认会调用当前配置的 AI 模型生成中文 Release 说明
+- 自动生成中文 Release 说明
+- 若 AI 不可用，会自动降级为模板正文，不影响发版
 
-## 🎨 使用场景示例
+默认值：
 
-### 场景 1：修复 bug
+- `AI_API_URL`: `https://api.openai.com/v1/chat/completions`
+- `AI_MODEL`: `gpt-5.4`
 
-```bash
-# 1. 修改代码
-# 2. 更新版本号: 2.0.3 → 2.0.4
-# 3. 提交
-git add .
-git commit -m "fix: 修复表情包显示问题"
+### Telegram 通知配置
 
-# 4. 发布
-npm run tuisong
-```
+如果需要自动发 Telegram 通知，请在 GitHub Environment `软件发布` 中配置：
 
-### 场景 2：添加新功能
+- Secret:
+  - `TELEGRAM_BOT_TOKEN`
 
-```bash
-# 1. 开发新功能
-# 2. 更新版本号: 2.0.3 → 2.1.0
-# 3. 提交
-git add .
-git commit -m "feat: 添加语音转文字功能"
+- Variable:
+  - `TELEGRAM_CHAT_IDS`
+  - `TELEGRAM_RELEASE_COVER_URL`（可选）
 
-# 4. 发布
-npm run tuisong
-```
+说明：
+- `TELEGRAM_CHAT_IDS` 支持多个目标，用英文逗号分隔
+- 可填写频道用户名或群/频道 chat_id
+- 成功发布时会发送 AI 摘要版通知
+- 发布失败时会发送失败通知
 
-### 场景 3：重大更新
+## 当前更新源角色
 
-```bash
-# 1. 重构代码
-# 2. 更新版本号: 2.0.3 → 3.0.0
-# 3. 提交
-git add .
-git commit -m "feat!: 全新 UI 设计"
-
-# 4. 发布
-npm run tuisong
-```
-
----
-
-## 🔧 其他构建脚本
-
-### 完整构建（生产环境）
-
-```bash
-npm run build:pro
-```
-
-包含：
-- ✅ 更新 README 版本号
-- ✅ TypeScript 编译
-- ✅ Vite 构建前端
-- ✅ Electron 打包
-- ✅ 生成美化安装包
-- ✅ 更新 latest.yml
-
-### 仅构建外壳（测试用）
-
-```bash
-node scripts/build-shell-only.js
-```
-
-用于快速测试安装程序界面。
-
----
-
-## 🤖 GitHub Actions 自动化
-
-推送到 `main` 分支时自动触发：
-
-1. 📦 安装依赖
-2. 🔨 重新编译原生模块
-3. 🏗️ 构建应用程序（`npm run build:pro`）
-4. 📊 获取版本号（从 `package.json`）
-5. 🎉 创建 GitHub Release（标签：`v2.0.4`）
-6. ☁️ 上传到 Cloudflare R2（自动删除旧版本）
-7. 📤 上传构建产物到 GitHub
-
-**查看构建状态：**  
-https://github.com/JiQingzhe2004/ciphertalk/actions
-
-**查看发布版本：**  
-https://github.com/JiQingzhe2004/ciphertalk/releases
-
----
-
-## ⚙️ GitHub Secrets 配置
-
-需要在 GitHub 仓库设置中配置以下 Secrets：
-
-### Cloudflare R2 配置
-
-1. 进入 GitHub 仓库 → Settings → Secrets and variables → Actions
-2. 点击 "New repository secret" 添加以下密钥：
-
-| Secret 名称 | 说明 | 示例值 |
-|------------|------|--------|
-| `R2_ACCOUNT_ID` | R2 账户 ID | `bf9d655d15b24e8636ef9e61c137785b` |
-| `R2_BUCKET_NAME` | R2 存储桶名称 | `miyu` |
-| `R2_ACCESS_KEY_ID` | R2 访问密钥 ID | `3c49eaabd4b1a28f1d6a4eb642942ee7` |
-| `R2_SECRET_ACCESS_KEY` | R2 桶密访问密钥 | `••••••••••••••••••••••••••••••••` |
-
-### 邮件通知配置（可选）
-
-如果需要在构建完成后收到邮件通知，添加以下 Secrets：
-
-| Secret 名称 | 说明 | 示例值 |
-|------------|------|--------|
-| `MAIL_USERNAME` | 发件邮箱（Gmail） | `your-email@gmail.com` |
-| `MAIL_PASSWORD` | Gmail 应用专用密码 | `abcd efgh ijkl mnop` |
-| `MAIL_TO` | 收件邮箱 | `your-email@gmail.com` |
-
-**如何获取 Gmail 应用专用密码：**
-
-1. 登录 [Google 账户](https://myaccount.google.com/)
-2. 进入 **安全性** → **两步验证**（需要先启用）
-3. 进入 **应用专用密码**
-4. 选择 **邮件** 和 **Windows 计算机**
-5. 点击 **生成**，复制 16 位密码（格式：`abcd efgh ijkl mnop`）
-6. 将密码添加到 GitHub Secrets 的 `MAIL_PASSWORD`
-
-**邮件通知功能：**
-- ✅ 构建成功时发送邮件（包含下载链接）
-- ❌ 构建失败时发送邮件（包含错误日志链接）
-- 📧 邮件发送到你的 GitHub 注册邮箱（或指定邮箱）
-
-### 如何获取 R2 凭证
-
-从你的截图中可以看到：
-- **账户 ID**：在 Cloudflare R2 页面顶部显示
-- **存储桶名称**：你创建的存储桶名称
-- **访问密钥 ID**：在 R2 API 令牌页面显示
-- **桶密访问密钥**：创建 API 令牌时显示（只显示一次，需要保存）
-
-### R2 上传规则
-
-- ✅ 自动上传 `CipherTalk-{版本号}-Setup.exe`
-- ✅ 自动上传 `latest.yml`（用于自动更新）
-- ✅ 自动删除旧版本的安装包（保留最新版本）
-- ❌ 不上传 Core 版本（`*-Core-Setup.exe`）
-- ℹ️ 如果存储桶为空，跳过删除步骤
-
----
-
-## 🔧 故障排查
-
-### 问题 1：检测到未提交的更改
-
-**错误：**
-```
-❌ 检测到未提交的更改:
- M package.json
- M src/App.tsx
-
-请先提交所有更改后再运行此脚本
-```
-
-**解决：**
-```bash
-# 提交所有更改
-git add .
-git commit -m "你的提交信息"
-
-# 然后运行脚本
-npm run tuisong
-```
-
-### 问题 2：推送失败
-
-**错误：**
-```
-❌ 推送失败
-请检查网络连接和 Git 配置
-```
-
-**解决：**
-- 检查网络连接
-- 检查 Git 配置
-- 确认 GitHub 账号已登录
-
-### 问题 3：标签已存在
-
-**提示：**
-```
-⚠️  标签 v2.0.4 已存在，跳过创建
-```
-
-**说明：**
-- 这是正常提示，不影响推送
-- 如果需要重新创建标签，先删除远程标签：
-  ```bash
-  git push origin :refs/tags/v2.0.4
-  git tag -d v2.0.4
-  ```
-
----
-
-## 💡 提示
-
-1. **推送前先测试** - 确保代码可以正常运行
-2. **遵循版本号规范** - 便于版本管理（[语义化版本](https://semver.org/lang/zh-CN/)）
-3. **写清楚提交信息** - 方便用户了解更新内容
-4. **等待构建完成** - 大约 10-15 分钟
-
----
-
-## 🔗 相关链接
-
-- [GitHub Actions 工作流](../.github/workflows/build-release.yml)
-- [语义化版本规范](https://semver.org/lang/zh-CN/)
-- [Git 提交规范](https://www.conventionalcommits.org/zh-hans/)
+- **GitHub Release**：主更新源，负责安装包与 `latest.yml`
+- **Cloudflare R2**：镜像下载源 + 策略补充源
+- **force-update.json**：GitHub 优先，R2 回退

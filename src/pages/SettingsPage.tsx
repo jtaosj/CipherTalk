@@ -98,7 +98,42 @@ function SettingsPage() {
   const [isDownloading, setIsDownloading] = useState(false)
   const [downloadProgress, setDownloadProgress] = useState(0)
   const [appVersion, setAppVersion] = useState('')
-  const [updateInfo, setUpdateInfo] = useState<{ hasUpdate: boolean; version?: string; releaseNotes?: string } | null>(null)
+  const [updateInfo, setUpdateInfo] = useState<{
+    hasUpdate: boolean
+    forceUpdate: boolean
+    currentVersion: string
+    version?: string
+    releaseNotes?: string
+    title?: string
+    message?: string
+    minimumSupportedVersion?: string
+    reason?: 'minimum-version' | 'blocked-version'
+    checkedAt: number
+    updateSource: 'github' | 'custom' | 'none'
+    policySource: 'github' | 'custom' | 'none'
+    diagnostics?: {
+      phase: 'idle' | 'checking' | 'available' | 'downloading' | 'downloaded' | 'installing' | 'failed'
+      strategy: 'unknown' | 'differential' | 'full'
+      fallbackToFull: boolean
+      lastError?: string
+      lastEvent?: string
+      progressPercent?: number
+      downloadedBytes?: number
+      totalBytes?: number
+      targetVersion?: string
+      lastUpdatedAt: number
+    }
+  } | null>(null)
+  const [updateSourceInfo, setUpdateSourceInfo] = useState<{
+    primaryUpdateSource: 'github'
+    githubRepository: {
+      owner: string
+      repo: string
+    }
+    policySources: Array<'github' | 'custom'>
+    policyPrecedence: 'github'
+    forceUpdatePolicyFallbackUrl: string
+  } | null>(null)
   const [keyStatus, setKeyStatus] = useState('')
   const [message, setMessage] = useState<{ text: string; success: boolean } | null>(null)
   const [showDecryptKey, setShowDecryptKey] = useState(false)
@@ -140,8 +175,6 @@ function SettingsPage() {
   const [aiCustomSystemPrompt, setAiCustomSystemPromptState] = useState<string>('')
   const [aiEnableThinking, setAiEnableThinkingState] = useState<boolean>(true)
   const [aiMessageLimit, setAiMessageLimitState] = useState<number>(3000)
-  const [mcpEnabled, setMcpEnabledState] = useState<boolean>(false)
-  const [mcpExposeMediaPaths, setMcpExposeMediaPathsState] = useState<boolean>(true)
 
   // 日志相关状态
   const [logFiles, setLogFiles] = useState<Array<{ name: string; size: number; mtime: Date }>>([])
@@ -221,8 +254,6 @@ function SettingsPage() {
       const savedAiCustomSystemPrompt = await configService.getAiCustomSystemPrompt()
       const savedAiEnableThinking = await configService.getAiEnableThinking()
       const savedAiMessageLimit = await configService.getAiMessageLimit()
-      const savedMcpEnabled = await configService.getMcpEnabled()
-      const savedMcpExposeMediaPaths = await configService.getMcpExposeMediaPaths()
 
       setAiProviderState(savedAiProvider)
       setAiApiKeyState(savedAiApiKey)
@@ -233,8 +264,6 @@ function SettingsPage() {
       setAiCustomSystemPromptState(savedAiCustomSystemPrompt)
       setAiEnableThinkingState(savedAiEnableThinking)
       setAiMessageLimitState(savedAiMessageLimit)
-      setMcpEnabledState(savedMcpEnabled)
-      setMcpExposeMediaPathsState(savedMcpExposeMediaPaths)
 
       // 加载关闭行为配置
       const savedCloseToTray = await configService.getCloseToTray()
@@ -268,8 +297,6 @@ function SettingsPage() {
         aiCustomSystemPrompt: savedAiCustomSystemPrompt,
         aiEnableThinking: savedAiEnableThinking,
         aiMessageLimit: savedAiMessageLimit,
-        mcpEnabled: savedMcpEnabled,
-        mcpExposeMediaPaths: savedMcpExposeMediaPaths,
         closeToTray: savedCloseToTray
       })
 
@@ -318,8 +345,6 @@ function SettingsPage() {
       aiCustomSystemPrompt,
       aiEnableThinking,
       aiMessageLimit,
-      mcpEnabled,
-      mcpExposeMediaPaths,
       closeToTray
     }
 
@@ -333,7 +358,6 @@ function SettingsPage() {
     quoteStyle, exportDefaultDateRange, exportDefaultAvatars,
     aiProvider, aiApiKey, aiModel, aiDefaultTimeRange, aiSummaryDetail,
     aiSystemPromptPreset, aiCustomSystemPrompt, aiEnableThinking, aiMessageLimit,
-    mcpEnabled, mcpExposeMediaPaths,
     closeToTray, initialConfig
   ])
 
@@ -477,7 +501,7 @@ function SettingsPage() {
       const result = await window.electronAPI.app.checkForUpdates()
       if (result.hasUpdate) {
         setUpdateInfo(result)
-        showMessage(`发现新版本 ${result.version}`, true)
+        showMessage(result.forceUpdate ? `检测到强制更新 ${result.version}` : `发现新版本 ${result.version}`, true)
       } else {
         showMessage('当前已是最新版本', true)
       }
@@ -859,8 +883,6 @@ function SettingsPage() {
       await configService.setAiCustomSystemPrompt(aiCustomSystemPrompt)
       await configService.setAiEnableThinking(aiEnableThinking)
       await configService.setAiMessageLimit(aiMessageLimit)
-      await configService.setMcpEnabled(mcpEnabled)
-      await configService.setMcpExposeMediaPaths(mcpExposeMediaPaths)
 
       // 保存关闭行为配置
       await configService.setCloseToTray(closeToTray)
@@ -900,8 +922,6 @@ function SettingsPage() {
         aiCustomSystemPrompt,
         aiEnableThinking,
         aiMessageLimit,
-        mcpEnabled,
-        mcpExposeMediaPaths,
         closeToTray
       })
       setHasUnsavedChanges(false)
@@ -2661,6 +2681,14 @@ function SettingsPage() {
     }
   }, [location.state])
 
+  useEffect(() => {
+    window.electronAPI.app.getUpdateSourceInfo?.().then((info) => {
+      setUpdateSourceInfo(info)
+    }).catch((error) => {
+      console.error('获取更新源信息失败:', error)
+    })
+  }, [])
+
   const renderAboutTab = () => (
     <div className="tab-content about-tab">
       <div className="about-card">
@@ -2672,9 +2700,34 @@ function SettingsPage() {
         <p className="about-version">v{appVersion || '...'}</p>
 
         <div className="about-update">
+          {updateSourceInfo && (
+            <div className="update-hint" style={{ marginBottom: '10px' }}>
+              主更新源：GitHub Release ({updateSourceInfo.githubRepository.owner}/{updateSourceInfo.githubRepository.repo})<br />
+              策略补充源：{updateSourceInfo.forceUpdatePolicyFallbackUrl}
+            </div>
+          )}
           {updateInfo?.hasUpdate ? (
             <>
-              <p className="update-hint">新版本 v{updateInfo.version} 可用</p>
+              <p className="update-hint">
+                {updateInfo.forceUpdate ? '检测到强制更新' : `新版本 v${updateInfo.version} 可用`}
+              </p>
+              <p className="update-hint">
+                更新来源：{updateInfo.updateSource === 'github' ? 'GitHub Release' : '未知'} / 策略来源：
+                {updateInfo.policySource === 'github' ? 'GitHub' : updateInfo.policySource === 'custom' ? '自定义源' : '无'}
+              </p>
+              {updateInfo.forceUpdate && updateInfo.minimumSupportedVersion && (
+                <p className="update-hint">最低安全版本：v{updateInfo.minimumSupportedVersion}</p>
+              )}
+              {updateInfo.diagnostics && (
+                <div className="update-hint" style={{ marginTop: '8px' }}>
+                  更新诊断：{updateInfo.diagnostics.phase}
+                  {updateInfo.diagnostics.fallbackToFull ? ' / 已从差分回退到全量' : ''}
+                  {updateInfo.diagnostics.lastEvent ? <><br />最近事件：{updateInfo.diagnostics.lastEvent}</> : null}
+                  {updateInfo.diagnostics.lastError ? <><br />最近错误：{updateInfo.diagnostics.lastError}</> : null}
+                  <br />
+                  详细诊断请查看日志文件中的 AppUpdate 记录。
+                </div>
+              )}
               {isDownloading ? (
                 <div className="download-progress">
                   <div className="progress-bar">
@@ -2802,10 +2855,6 @@ function SettingsPage() {
             setEnableThinking={setAiEnableThinkingState}
             messageLimit={aiMessageLimit}
             setMessageLimit={setAiMessageLimitState}
-            mcpEnabled={mcpEnabled}
-            setMcpEnabled={setMcpEnabledState}
-            mcpExposeMediaPaths={mcpExposeMediaPaths}
-            setMcpExposeMediaPaths={setMcpExposeMediaPathsState}
             showMessage={showMessage}
           />
         )}

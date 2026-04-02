@@ -16,6 +16,7 @@ import GroupAnalyticsPage from './pages/GroupAnalyticsPage'
 import DataManagementPage from './pages/DataManagementPage'
 import SettingsPage from './pages/SettingsPage'
 import OpenApiPage from './pages/OpenApiPage'
+import McpPage from './pages/McpPage'
 import ExportPage from './pages/ExportPage'
 import ActivationPage from './pages/ActivationPage'
 import ImageWindow from './pages/ImageWindow'
@@ -37,6 +38,21 @@ import { useAuthStore } from './stores/authStore'
 import { X, Shield, Loader2 } from 'lucide-react'
 import './App.scss'
 
+type AppUpdateInfo = {
+  hasUpdate: boolean
+  forceUpdate: boolean
+  currentVersion: string
+  version?: string
+  releaseNotes?: string
+  title?: string
+  message?: string
+  minimumSupportedVersion?: string
+  reason?: 'minimum-version' | 'blocked-version'
+  checkedAt: number
+  updateSource: 'github' | 'custom' | 'none'
+  policySource: 'github' | 'custom' | 'none'
+}
+
 function App() {
   const navigate = useNavigate()
   const location = useLocation()
@@ -54,7 +70,7 @@ function App() {
   const [showActivation, setShowActivation] = useState(false)
 
   // 更新提示状态
-  const [updateInfo, setUpdateInfo] = useState<{ version: string; releaseNotes: string } | null>(null)
+  const [updateInfo, setUpdateInfo] = useState<AppUpdateInfo | null>(null)
   const [downloadProgress, setDownloadProgress] = useState<number | null>(null)
 
   // 加载主题配置
@@ -135,6 +151,15 @@ function App() {
 
   // 监听启动时的更新通知
   useEffect(() => {
+    let mounted = true
+    window.electronAPI.app.getUpdateState?.().then((info) => {
+      if (mounted && info?.hasUpdate) {
+        setUpdateInfo(info)
+      }
+    }).catch((error) => {
+      console.error('获取更新状态失败:', error)
+    })
+
     const removeUpdateListener = window.electronAPI.app.onUpdateAvailable?.((info) => {
       setUpdateInfo(info)
     })
@@ -161,6 +186,7 @@ function App() {
     })
 
     return () => {
+      mounted = false
       removeUpdateListener?.()
       removeSessionsListener?.()
       removeUpdateAvailableListener?.()
@@ -178,6 +204,7 @@ function App() {
   }, [])
 
   const dismissUpdate = () => {
+    if (updateInfo?.forceUpdate) return
     setUpdateInfo(null)
   }
 
@@ -465,12 +492,13 @@ function App() {
   return (
     <div className="app-container">
       <TitleBar />
-      {updateInfo && (
+      {updateInfo && !updateInfo.forceUpdate && (
         <div className="update-toast">
           <div className="update-toast-icon">🎉</div>
           <div className="update-toast-content">
             <div className="update-toast-title">发现新版本</div>
             <div className="update-toast-version">v{updateInfo.version} 已发布</div>
+            <div className="update-toast-version">更新源：{updateInfo.updateSource === 'github' ? 'GitHub Release' : '未知'}</div>
           </div>
           <button className="update-toast-btn" onClick={() => {
             window.electronAPI.app.downloadAndInstall()
@@ -481,6 +509,56 @@ function App() {
           <button className="update-toast-close" onClick={dismissUpdate}>
             <X size={14} />
           </button>
+        </div>
+      )}
+      {updateInfo?.forceUpdate && (
+        <div className="force-update-overlay">
+          <div className="force-update-card">
+            <div className="force-update-badge">
+              <Shield size={18} />
+              <span>强制更新</span>
+            </div>
+            <h2>{updateInfo.title || '必须更新后才能继续使用'}</h2>
+            <p className="force-update-desc">
+              {updateInfo.message || '当前版本已被标记为需要立即升级，应用将限制继续使用，直到安装最新版本。'}
+            </p>
+
+            <div className="force-update-meta">
+              <div>当前版本：v{updateInfo.currentVersion}</div>
+              {updateInfo.version && <div>目标版本：v{updateInfo.version}</div>}
+              {updateInfo.minimumSupportedVersion && <div>最低安全版本：v{updateInfo.minimumSupportedVersion}</div>}
+              <div>更新来源：{updateInfo.updateSource === 'github' ? 'GitHub Release' : '未检测到普通更新源'}</div>
+              <div>策略来源：{updateInfo.policySource === 'github' ? 'GitHub 策略源' : updateInfo.policySource === 'custom' ? '自定义策略源' : '无'}</div>
+            </div>
+
+            {updateInfo.releaseNotes && (
+              <div className="force-update-notes">
+                <div className="force-update-notes-title">更新说明</div>
+                <pre>{updateInfo.releaseNotes}</pre>
+              </div>
+            )}
+
+            {downloadProgress !== null && (
+              <div className="force-update-progress">
+                <div className="force-update-progress-label">
+                  <Loader2 size={16} className="spin" />
+                  <span>正在下载更新... {downloadProgress.toFixed(0)}%</span>
+                </div>
+                <div className="force-update-progress-bar">
+                  <div className="force-update-progress-fill" style={{ width: `${downloadProgress}%` }} />
+                </div>
+              </div>
+            )}
+
+            <div className="force-update-actions">
+              <button className="btn btn-primary" onClick={() => window.electronAPI.app.downloadAndInstall()}>
+                立即更新
+              </button>
+              <button className="btn btn-secondary" onClick={() => window.electronAPI.window.close()}>
+                退出应用
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
@@ -513,6 +591,7 @@ function App() {
               <Route path="/data-management" element={<DataManagementPage />} />
               <Route path="/settings" element={<SettingsPage />} />
               <Route path="/open-api" element={<OpenApiPage />} />
+              <Route path="/mcp" element={<McpPage />} />
               <Route path="/export" element={<ExportPage />} />
               <Route path="/chat-history/:sessionId/:messageId" element={<ChatHistoryPage />} />
             </Routes>

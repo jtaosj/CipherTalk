@@ -27,6 +27,7 @@ export interface ContactInfo {
   nickname?: string
   avatarUrl?: string
   type: 'friend' | 'group' | 'official' | 'former_friend' | 'other'
+  lastContactTime?: number
 }
 
 export interface Message {
@@ -98,6 +99,22 @@ export interface Contact {
   alias: string
   remark: string
   nickName: string
+}
+
+function compareMessageCursorAsc(
+  a: Pick<Message, 'sortSeq' | 'createTime' | 'localId'>,
+  b: Pick<Message, 'sortSeq' | 'createTime' | 'localId'>
+): number {
+  return Number(a.sortSeq || 0) - Number(b.sortSeq || 0)
+    || Number(a.createTime || 0) - Number(b.createTime || 0)
+    || Number(a.localId || 0) - Number(b.localId || 0)
+}
+
+function compareMessageCursorDesc(
+  a: Pick<Message, 'sortSeq' | 'createTime' | 'localId'>,
+  b: Pick<Message, 'sortSeq' | 'createTime' | 'localId'>
+): number {
+  return compareMessageCursorAsc(b, a)
 }
 
 // 表情包缓存
@@ -1001,16 +1018,16 @@ class ChatService extends EventEmitter {
              n.user_name AS sender_username
              FROM ${tableName} m
              LEFT JOIN Name2Id n ON m.real_sender_id = n.rowid
-             ORDER BY m.sort_seq DESC
+             ORDER BY m.sort_seq DESC, m.create_time DESC, m.local_id DESC
              LIMIT ? OFFSET ?`
     } else if (hasName2Id) {
       sql = `SELECT m.*, n.user_name AS sender_username
              FROM ${tableName} m
              LEFT JOIN Name2Id n ON m.real_sender_id = n.rowid
-             ORDER BY m.sort_seq DESC
+             ORDER BY m.sort_seq DESC, m.create_time DESC, m.local_id DESC
              LIMIT ? OFFSET ?`
     } else {
-      sql = `SELECT * FROM ${tableName} ORDER BY sort_seq DESC LIMIT ? OFFSET ?`
+      sql = `SELECT * FROM ${tableName} ORDER BY sort_seq DESC, create_time DESC, local_id DESC LIMIT ? OFFSET ?`
     }
 
     const stmt = db.prepare(sql)
@@ -1248,7 +1265,7 @@ class ChatService extends EventEmitter {
       }
 
       // 按 sort_seq 降序排序（最新的在前）
-      allMessages.sort((a, b) => b.sortSeq - a.sortSeq)
+      allMessages.sort(compareMessageCursorDesc)
 
       // 去重（同一条消息可能在多个数据库中）
       const seen = new Set<string>()
@@ -1363,7 +1380,7 @@ class ChatService extends EventEmitter {
                      OR (m.sort_seq = ? AND m.create_time < ?)
                      OR (m.sort_seq = ? AND m.create_time = ? AND m.local_id < ?)
                    )
-                   ORDER BY m.sort_seq DESC
+                   ORDER BY m.sort_seq DESC, m.create_time DESC, m.local_id DESC
                    LIMIT ?`
             rows = db.prepare(sql).all(
               myRowId,
@@ -1384,7 +1401,7 @@ class ChatService extends EventEmitter {
                      OR (m.sort_seq = ? AND m.create_time < ?)
                      OR (m.sort_seq = ? AND m.create_time = ? AND m.local_id < ?)
                    )
-                   ORDER BY m.sort_seq DESC
+                   ORDER BY m.sort_seq DESC, m.create_time DESC, m.local_id DESC
                    LIMIT ?`
             rows = db.prepare(sql).all(
               cursorSortSeq,
@@ -1402,7 +1419,7 @@ class ChatService extends EventEmitter {
                      OR (sort_seq = ? AND create_time < ?)
                      OR (sort_seq = ? AND create_time = ? AND local_id < ?)
                    )
-                   ORDER BY sort_seq DESC
+                   ORDER BY sort_seq DESC, create_time DESC, local_id DESC
                    LIMIT ?`
             rows = db.prepare(sql).all(
               cursorSortSeq,
@@ -1536,7 +1553,7 @@ class ChatService extends EventEmitter {
         }
       }
 
-      allMessages.sort((a, b) => b.sortSeq - a.sortSeq)
+      allMessages.sort(compareMessageCursorDesc)
 
       const seen = new Set<string>()
       allMessages = allMessages.filter(msg => {
@@ -1553,6 +1570,277 @@ class ChatService extends EventEmitter {
       return { success: true, messages, hasMore }
     } catch (e) {
       console.error('ChatService: 获取更早消息失败:', e)
+      return { success: false, error: String(e) }
+    }
+  }
+
+  /**
+   * 基于 sortSeq 游标，获取更新的消息（严格大于 cursorSortSeq）
+   */
+  async getMessagesAfter(
+    sessionId: string,
+    cursorSortSeq: number,
+    limit: number = 50,
+    cursorCreateTime?: number,
+    cursorLocalId?: number
+  ): Promise<{ success: boolean; messages?: Message[]; hasMore?: boolean; error?: string }> {
+    try {
+      if (!this.dbDir) {
+        const connectResult = await this.connect()
+        if (!connectResult.success) {
+          return { success: false, error: connectResult.error || '数据库未连接' }
+        }
+      }
+
+      const myWxid = this.configService.get('myWxid')
+      const cleanedMyWxid = myWxid ? this.cleanAccountDirName(myWxid) : ''
+
+      const dbTablePairs = this.findSessionTables(sessionId)
+      if (dbTablePairs.length === 0) {
+        return { success: false, error: '未找到该会话的消息表' }
+      }
+
+      let allMessages: Message[] = []
+      const fetchLimitPerDb = Math.max(limit + 1, 50)
+      const effectiveCursorCreateTime = cursorCreateTime ?? Number.MIN_SAFE_INTEGER
+      const effectiveCursorLocalId = cursorLocalId ?? Number.MIN_SAFE_INTEGER
+
+      for (const { db, tableName, dbPath } of dbTablePairs) {
+        try {
+          const hasName2IdTable = this.checkTableExists(db, 'Name2Id')
+
+          let myRowId: number | null = null
+          if (myWxid && hasName2IdTable) {
+            const cacheKeyOriginal = `${dbPath}:${myWxid}`
+            const cachedRowIdOriginal = this.myRowIdCache.get(cacheKeyOriginal)
+
+            if (cachedRowIdOriginal !== undefined) {
+              myRowId = cachedRowIdOriginal
+            } else {
+              const row = db.prepare('SELECT rowid FROM Name2Id WHERE user_name = ?').get(myWxid) as any
+              if (row?.rowid) {
+                myRowId = row.rowid
+                this.myRowIdCache.set(cacheKeyOriginal, myRowId)
+              } else if (cleanedMyWxid && cleanedMyWxid !== myWxid) {
+                const cacheKeyCleaned = `${dbPath}:${cleanedMyWxid}`
+                const cachedRowIdCleaned = this.myRowIdCache.get(cacheKeyCleaned)
+
+                if (cachedRowIdCleaned !== undefined) {
+                  myRowId = cachedRowIdCleaned
+                } else {
+                  const row2 = db.prepare('SELECT rowid FROM Name2Id WHERE user_name = ?').get(cleanedMyWxid) as any
+                  myRowId = row2?.rowid ?? null
+                  this.myRowIdCache.set(cacheKeyCleaned, myRowId)
+                }
+              } else {
+                this.myRowIdCache.set(cacheKeyOriginal, null)
+              }
+            }
+          }
+
+          let sql: string
+          let rows: any[]
+
+          if (hasName2IdTable && myRowId !== null) {
+            sql = `SELECT m.*,
+                   CASE WHEN m.real_sender_id = ? THEN 1 ELSE 0 END AS computed_is_send,
+                   n.user_name AS sender_username
+                   FROM ${tableName} m
+                   LEFT JOIN Name2Id n ON m.real_sender_id = n.rowid
+                   WHERE (
+                     m.sort_seq > ?
+                     OR (m.sort_seq = ? AND m.create_time > ?)
+                     OR (m.sort_seq = ? AND m.create_time = ? AND m.local_id > ?)
+                   )
+                   ORDER BY m.sort_seq ASC, m.create_time ASC, m.local_id ASC
+                   LIMIT ?`
+            rows = db.prepare(sql).all(
+              myRowId,
+              cursorSortSeq,
+              cursorSortSeq,
+              effectiveCursorCreateTime,
+              cursorSortSeq,
+              effectiveCursorCreateTime,
+              effectiveCursorLocalId,
+              fetchLimitPerDb
+            ) as any[]
+          } else if (hasName2IdTable) {
+            sql = `SELECT m.*, n.user_name AS sender_username
+                   FROM ${tableName} m
+                   LEFT JOIN Name2Id n ON m.real_sender_id = n.rowid
+                   WHERE (
+                     m.sort_seq > ?
+                     OR (m.sort_seq = ? AND m.create_time > ?)
+                     OR (m.sort_seq = ? AND m.create_time = ? AND m.local_id > ?)
+                   )
+                   ORDER BY m.sort_seq ASC, m.create_time ASC, m.local_id ASC
+                   LIMIT ?`
+            rows = db.prepare(sql).all(
+              cursorSortSeq,
+              cursorSortSeq,
+              effectiveCursorCreateTime,
+              cursorSortSeq,
+              effectiveCursorCreateTime,
+              effectiveCursorLocalId,
+              fetchLimitPerDb
+            ) as any[]
+          } else {
+            sql = `SELECT * FROM ${tableName}
+                   WHERE (
+                     sort_seq > ?
+                     OR (sort_seq = ? AND create_time > ?)
+                     OR (sort_seq = ? AND create_time = ? AND local_id > ?)
+                   )
+                   ORDER BY sort_seq ASC, create_time ASC, local_id ASC
+                   LIMIT ?`
+            rows = db.prepare(sql).all(
+              cursorSortSeq,
+              cursorSortSeq,
+              effectiveCursorCreateTime,
+              cursorSortSeq,
+              effectiveCursorCreateTime,
+              effectiveCursorLocalId,
+              fetchLimitPerDb
+            ) as any[]
+          }
+
+          for (const row of rows) {
+            const content = this.decodeMessageContent(row.message_content, row.compress_content)
+            const localType = row.local_type || row.type || 1
+            const isSend = row.computed_is_send ?? row.is_send ?? null
+
+            let emojiCdnUrl: string | undefined
+            let emojiMd5: string | undefined
+            let emojiProductId: string | undefined
+            let quotedContent: string | undefined
+            let quotedSender: string | undefined
+            let quotedImageMd5: string | undefined
+            let quotedEmojiMd5: string | undefined
+            let quotedEmojiCdnUrl: string | undefined
+            let imageMd5: string | undefined
+            let imageDatName: string | undefined
+            let isLivePhoto: boolean | undefined
+            let videoMd5: string | undefined
+            let videoDuration: number | undefined
+            let voiceDuration: number | undefined
+
+            if (localType === 47 && content) {
+              const emojiInfo = this.parseEmojiInfo(content)
+              emojiCdnUrl = emojiInfo.cdnUrl
+              emojiMd5 = emojiInfo.md5
+              emojiProductId = emojiInfo.productId
+            } else if (localType === 3 && content) {
+              const imageInfo = this.parseImageInfo(content)
+              imageMd5 = imageInfo.md5
+              imageDatName = this.parseImageDatNameFromRow(row)
+              isLivePhoto = imageInfo.isLivePhoto
+            } else if (localType === 43 && content) {
+              videoMd5 = this.parseVideoMd5(content)
+              videoDuration = this.parseVideoDuration(content)
+            } else if (localType === 34 && content) {
+              voiceDuration = this.parseVoiceDuration(content)
+            } else if (localType === 244813135921 || (content && content.includes('<type>57</type>'))) {
+              const quoteInfo = this.parseQuoteMessage(content)
+              quotedContent = quoteInfo.content
+              quotedSender = quoteInfo.sender
+              quotedImageMd5 = quoteInfo.imageMd5
+              quotedEmojiMd5 = quoteInfo.emojiMd5
+              quotedEmojiCdnUrl = quoteInfo.emojiCdnUrl
+            }
+
+            let fileName: string | undefined
+            let fileSize: number | undefined
+            let fileExt: string | undefined
+            let fileMd5: string | undefined
+            if (localType === 49 && content) {
+              const fileInfo = this.parseFileInfo(content)
+              fileName = fileInfo.fileName
+              fileSize = fileInfo.fileSize
+              fileExt = fileInfo.fileExt
+              fileMd5 = fileInfo.fileMd5
+            }
+
+            let chatRecordList: ChatRecordItem[] | undefined
+            if (content) {
+              const xmlType = this.extractXmlValue(content, 'type')
+              if (xmlType === '19' || localType === 49) {
+                chatRecordList = this.parseChatHistory(content)
+              }
+            }
+
+            let transferPayerUsername: string | undefined
+            let transferReceiverUsername: string | undefined
+            if ((localType === 49 || localType === 8589934592049) && content) {
+              const xmlType = this.extractXmlValue(content, 'type')
+              if (xmlType === '2000') {
+                transferPayerUsername = this.extractXmlValue(content, 'payer_username') || undefined
+                transferReceiverUsername = this.extractXmlValue(content, 'receiver_username') || undefined
+              }
+            }
+
+            const parsedContent = this.parseMessageContent(content, localType)
+
+            allMessages.push({
+              localId: row.local_id || 0,
+              serverId: row.server_id || 0,
+              localType,
+              createTime: row.create_time || 0,
+              sortSeq: row.sort_seq || 0,
+              isSend,
+              senderUsername: row.sender_username || null,
+              parsedContent,
+              rawContent: content,
+              emojiCdnUrl,
+              emojiMd5,
+              productId: emojiProductId,
+              quotedContent,
+              quotedSender,
+              quotedImageMd5,
+              quotedEmojiMd5,
+              quotedEmojiCdnUrl,
+              imageMd5,
+              imageDatName,
+              isLivePhoto,
+              videoMd5,
+              videoDuration,
+              voiceDuration,
+              fileName,
+              fileSize,
+              fileExt,
+              fileMd5,
+              chatRecordList,
+              transferPayerUsername,
+              transferReceiverUsername
+            })
+          }
+        } catch (e: any) {
+          if (e?.code === 'SQLITE_CORRUPT' || e?.message?.includes('malformed')) {
+            console.error(`[ChatService] 数据库损坏: ${dbPath}`, e)
+            this.messageDbCache.delete(dbPath)
+            try { db.close() } catch { }
+            this.refreshMessageDbCache()
+          } else {
+            console.error('ChatService: 查询更新消息失败:', e)
+          }
+        }
+      }
+
+      allMessages.sort(compareMessageCursorAsc)
+
+      const seen = new Set<string>()
+      allMessages = allMessages.filter(msg => {
+        const key = `${msg.serverId}-${msg.localId}-${msg.createTime}-${msg.sortSeq}`
+        if (seen.has(key)) return false
+        seen.add(key)
+        return true
+      })
+
+      const hasMore = allMessages.length > limit
+      const messages = allMessages.slice(0, limit)
+
+      return { success: true, messages, hasMore }
+    } catch (e) {
+      console.error('ChatService: 获取更新消息失败:', e)
       return { success: false, error: String(e) }
     }
   }
@@ -1693,7 +1981,7 @@ class ChatService extends EventEmitter {
       }
 
       // 按 sort_seq 降序排序
-      allVoiceMessages.sort((a, b) => b.sortSeq - a.sortSeq)
+      allVoiceMessages.sort(compareMessageCursorDesc)
 
       // 去重
       const seen = new Set<string>()

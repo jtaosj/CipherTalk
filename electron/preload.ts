@@ -1,5 +1,28 @@
 import { contextBridge, ipcRenderer } from 'electron'
 
+function getMcpLaunchConfigSafe(): Promise<{
+  command: string
+  args: string[]
+  cwd: string
+  mode: 'dev' | 'packaged'
+} | null> {
+  return new Promise((resolve) => {
+    const requestId = `${Date.now()}-${Math.random().toString(36).slice(2)}`
+    const responseChannel = `app:getMcpLaunchConfig:response:${requestId}`
+    const timeout = setTimeout(() => {
+      ipcRenderer.removeAllListeners(responseChannel)
+      resolve(null)
+    }, 600)
+
+    ipcRenderer.once(responseChannel, (_, payload) => {
+      clearTimeout(timeout)
+      resolve(payload ?? null)
+    })
+
+    ipcRenderer.send('app:getMcpLaunchConfig:request', { requestId })
+  })
+}
+
 // 暴露给渲染进程的 API
 contextBridge.exposeInMainWorld('electronAPI', {
   // 配置
@@ -47,6 +70,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   app: {
     getDownloadsPath: () => ipcRenderer.invoke('app:getDownloadsPath'),
     getVersion: () => ipcRenderer.invoke('app:getVersion'),
+    getMcpLaunchConfig: () => getMcpLaunchConfigSafe(),
+    getUpdateState: () => ipcRenderer.invoke('app:getUpdateState'),
+    getUpdateSourceInfo: () => ipcRenderer.invoke('app:getUpdateSourceInfo'),
     checkForUpdates: () => ipcRenderer.invoke('app:checkForUpdates'),
     downloadAndInstall: () => ipcRenderer.invoke('app:downloadAndInstall'),
     getStartupDbConnected: () => ipcRenderer.invoke('app:getStartupDbConnected'),
@@ -55,7 +81,20 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.on('app:downloadProgress', (_, progress) => callback(progress))
       return () => ipcRenderer.removeAllListeners('app:downloadProgress')
     },
-    onUpdateAvailable: (callback: (info: { version: string; releaseNotes: string }) => void) => {
+    onUpdateAvailable: (callback: (info: {
+      hasUpdate: boolean
+      forceUpdate: boolean
+      currentVersion: string
+      version?: string
+      releaseNotes?: string
+      title?: string
+      message?: string
+      minimumSupportedVersion?: string
+      reason?: 'minimum-version' | 'blocked-version'
+      checkedAt: number
+      updateSource: 'github' | 'custom' | 'none'
+      policySource: 'github' | 'custom' | 'none'
+    }) => void) => {
       ipcRenderer.on('app:updateAvailable', (_, info) => callback(info))
       return () => ipcRenderer.removeAllListeners('app:updateAvailable')
     }

@@ -1,0 +1,396 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  prepare-meta:
+    runs-on: windows-latest
+    environment: 软件发布
+    env:
+      GH_TOKEN: ${{ secrets.GH_TOKEN }}
+      AI_API_URL: ${{ vars.AI_API_URL }}
+      AI_MODEL: ${{ vars.AI_MODEL }}
+      FORCE_UPDATE_MIN_VERSION: ${{ vars.FORCE_UPDATE_MIN_VERSION }}
+      FORCE_UPDATE_BLOCKED_VERSIONS: ${{ vars.FORCE_UPDATE_BLOCKED_VERSIONS }}
+      FORCE_UPDATE_TITLE: ${{ vars.FORCE_UPDATE_TITLE }}
+      FORCE_UPDATE_MESSAGE: ${{ vars.FORCE_UPDATE_MESSAGE }}
+      FORCE_UPDATE_RELEASE_NOTES: ${{ vars.FORCE_UPDATE_RELEASE_NOTES }}
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22.12.0
+          cache: npm
+
+      - name: Read package version
+        id: version
+        shell: pwsh
+        run: |
+          $pkg = Get-Content package.json -Raw | ConvertFrom-Json
+          "version=$($pkg.version)" >> $env:GITHUB_OUTPUT
+          "tag=${env:GITHUB_REF_NAME}" >> $env:GITHUB_OUTPUT
+
+      - name: Validate tag matches package version
+        shell: pwsh
+        run: |
+          $expectedTag = "v${{ steps.version.outputs.version }}"
+          $actualTag = "${{ steps.version.outputs.tag }}"
+          if ($actualTag -ne $expectedTag) {
+            Write-Error "Tag $actualTag does not match package.json version $expectedTag"
+            exit 1
+          }
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate force update manifest
+        run: npm run build:force-update-manifest
+
+      - name: Generate release context
+        env:
+          RELEASE_TAG: ${{ steps.version.outputs.tag }}
+        run: npm run build:release-context
+
+      - name: Upload release metadata
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-meta
+          path: |
+            release/force-update.json
+            release/release-context.json
+          if-no-files-found: error
+
+  build-windows:
+    runs-on: windows-latest
+    environment: 软件发布
+    needs: prepare-meta
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22.12.0
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Rebuild native modules
+        run: npx electron-rebuild
+
+      - name: Build app
+        run: npm run build:ci
+
+      - name: Validate build artifacts
+        shell: pwsh
+        run: |
+          $version = "${{ needs.prepare-meta.outputs.version }}"
+          $installer = "release/CipherTalk-$version-Setup.exe"
+          $blockmaps = Get-ChildItem "release" -Filter "*.blockmap" -ErrorAction SilentlyContinue
+          if (-not (Test-Path $installer)) {
+            Write-Error "Installer not found: $installer"
+            exit 1
+          }
+          if (-not (Test-Path "release/latest.yml")) {
+            Write-Error "latest.yml not found"
+            exit 1
+          }
+          if (-not $blockmaps -or $blockmaps.Count -lt 1) {
+            Write-Error "blockmap not found"
+            exit 1
+          }
+
+      - name: Upload release binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-binaries
+          path: |
+            release/CipherTalk-${{ needs.prepare-meta.outputs.version }}-Setup.exe
+            release/latest.yml
+            release/*.blockmap
+          if-no-files-found: error
+
+  generate-release-body:
+    runs-on: windows-latest
+    environment: 软件发布
+    needs: prepare-meta
+    env:
+      GH_TOKEN: ${{ secrets.GH_TOKEN }}
+      AI_API_KEY: ${{ secrets.AI_API_KEY }}
+      AI_API_URL: ${{ vars.AI_API_URL }}
+      AI_MODEL: ${{ vars.AI_MODEL }}
+      FORCE_UPDATE_MIN_VERSION: ${{ vars.FORCE_UPDATE_MIN_VERSION }}
+      FORCE_UPDATE_BLOCKED_VERSIONS: ${{ vars.FORCE_UPDATE_BLOCKED_VERSIONS }}
+      FORCE_UPDATE_TITLE: ${{ vars.FORCE_UPDATE_TITLE }}
+      FORCE_UPDATE_MESSAGE: ${{ vars.FORCE_UPDATE_MESSAGE }}
+      FORCE_UPDATE_RELEASE_NOTES: ${{ vars.FORCE_UPDATE_RELEASE_NOTES }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22.12.0
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Download release metadata
+        uses: actions/download-artifact@v4
+        with:
+          name: release-meta
+          path: release
+
+      - name: Generate AI release body
+        run: npm run build:release-body
+
+      - name: Validate release body
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "release/release-body.md")) {
+            Write-Error "release-body.md not found"
+            exit 1
+          }
+
+      - name: Upload release body
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-body
+          path: release/release-body.md
+          if-no-files-found: error
+
+  publish-github-release:
+    runs-on: windows-latest
+    environment: 软件发布
+    needs:
+      - prepare-meta
+      - build-windows
+      - generate-release-body
+    env:
+      GH_TOKEN: ${{ secrets.GH_TOKEN }}
+    steps:
+      - name: Download release metadata
+        uses: actions/download-artifact@v4
+        with:
+          name: release-meta
+          path: release
+
+      - name: Download release binaries
+        uses: actions/download-artifact@v4
+        with:
+          name: release-binaries
+          path: release
+
+      - name: Download release body
+        uses: actions/download-artifact@v4
+        with:
+          name: release-body
+          path: release
+
+      - name: Validate release package
+        shell: pwsh
+        run: |
+          $version = "${{ needs.prepare-meta.outputs.version }}"
+          $installer = "release/CipherTalk-$version-Setup.exe"
+          $blockmaps = Get-ChildItem "release" -Filter "*.blockmap" -ErrorAction SilentlyContinue
+          if (-not (Test-Path $installer)) {
+            Write-Error "Installer not found: $installer"
+            exit 1
+          }
+          if (-not (Test-Path "release/latest.yml")) {
+            Write-Error "latest.yml not found"
+            exit 1
+          }
+          if (-not (Test-Path "release/force-update.json")) {
+            Write-Error "force-update.json not found"
+            exit 1
+          }
+          if (-not (Test-Path "release/release-body.md")) {
+            Write-Error "release-body.md not found"
+            exit 1
+          }
+          if (-not $blockmaps -or $blockmaps.Count -lt 1) {
+            Write-Error "blockmap not found"
+            exit 1
+          }
+
+      - name: Create or update GitHub Release
+        uses: softprops/action-gh-release@v2.5.0
+        with:
+          tag_name: ${{ needs.prepare-meta.outputs.tag }}
+          body_path: release/release-body.md
+          fail_on_unmatched_files: false
+          files: |
+            release/CipherTalk-${{ needs.prepare-meta.outputs.version }}-Setup.exe
+            release/latest.yml
+            release/force-update.json
+            release/*.blockmap
+
+  mirror-r2:
+    runs-on: windows-latest
+    environment: 软件发布
+    needs:
+      - prepare-meta
+      - build-windows
+    env:
+      R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+      R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
+      R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+    steps:
+      - name: Download release metadata
+        uses: actions/download-artifact@v4
+        with:
+          name: release-meta
+          path: release
+
+      - name: Download release binaries
+        uses: actions/download-artifact@v4
+        with:
+          name: release-binaries
+          path: release
+
+      - name: Ensure AWS CLI
+        shell: pwsh
+        run: |
+          if (-not (Get-Command aws -ErrorAction SilentlyContinue)) {
+            choco install awscli -y
+          }
+          aws --version
+
+      - name: Upload mirrored files to R2
+        shell: pwsh
+        run: |
+          if (-not $env:R2_ACCOUNT_ID -or -not $env:R2_BUCKET_NAME -or -not $env:R2_ACCESS_KEY_ID -or -not $env:R2_SECRET_ACCESS_KEY) {
+            Write-Error "R2 secrets are required"
+            exit 1
+          }
+
+          $env:AWS_ACCESS_KEY_ID = $env:R2_ACCESS_KEY_ID
+          $env:AWS_SECRET_ACCESS_KEY = $env:R2_SECRET_ACCESS_KEY
+          $env:AWS_DEFAULT_REGION = "auto"
+          $endpoint = "https://$($env:R2_ACCOUNT_ID).r2.cloudflarestorage.com"
+          $bucket = "s3://$($env:R2_BUCKET_NAME)"
+          $version = "${{ needs.prepare-meta.outputs.version }}"
+          $currentInstaller = "CipherTalk-$version-Setup.exe"
+          $currentBlockmaps = Get-ChildItem "release" -Filter "*.blockmap" -ErrorAction SilentlyContinue
+
+          if (-not $currentBlockmaps -or $currentBlockmaps.Count -lt 1) {
+            Write-Error "blockmap not found"
+            exit 1
+          }
+
+          $existingInstallers = aws s3 ls $bucket --endpoint-url $endpoint | ForEach-Object {
+            $line = $_.ToString().Trim()
+            if ($line -match 'CipherTalk-.*-Setup\.exe$') {
+              ($line -split '\s+')[-1]
+            }
+          } | Where-Object { $_ }
+
+          $existingBlockmaps = aws s3 ls $bucket --endpoint-url $endpoint | ForEach-Object {
+            $line = $_.ToString().Trim()
+            if ($line -match '\.blockmap$') {
+              ($line -split '\s+')[-1]
+            }
+          } | Where-Object { $_ }
+
+          foreach ($installer in $existingInstallers) {
+            if ($installer -ne $currentInstaller) {
+              aws s3 rm "$bucket/$installer" --endpoint-url $endpoint
+            }
+          }
+
+          foreach ($blockmap in $existingBlockmaps) {
+            if ($currentBlockmaps.Name -notcontains $blockmap) {
+              aws s3 rm "$bucket/$blockmap" --endpoint-url $endpoint
+            }
+          }
+
+          aws s3 cp "release/$currentInstaller" "$bucket/$currentInstaller" --endpoint-url $endpoint
+          aws s3 cp "release/latest.yml" "$bucket/latest.yml" --endpoint-url $endpoint
+          aws s3 cp "release/force-update.json" "$bucket/force-update.json" --endpoint-url $endpoint
+          foreach ($blockmap in $currentBlockmaps) {
+            aws s3 cp $blockmap.FullName "$bucket/$($blockmap.Name)" --endpoint-url $endpoint
+          }
+
+  notify-telegram-success:
+    runs-on: windows-latest
+    environment: 软件发布
+    needs:
+      - prepare-meta
+      - generate-release-body
+      - publish-github-release
+    env:
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_IDS: ${{ vars.TELEGRAM_CHAT_IDS }}
+      TELEGRAM_RELEASE_COVER_URL: ${{ vars.TELEGRAM_RELEASE_COVER_URL }}
+      RELEASE_VERSION: ${{ needs.prepare-meta.outputs.version }}
+      TELEGRAM_NOTIFY_MODE: success
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22.12.0
+          cache: npm
+
+      - name: Download release metadata
+        uses: actions/download-artifact@v4
+        with:
+          name: release-meta
+          path: release
+
+      - name: Download release body
+        uses: actions/download-artifact@v4
+        with:
+          name: release-body
+          path: release
+
+      - name: Notify Telegram success
+        run: npm run notify:telegram
+        continue-on-error: true
+
+  notify-failure:
+    runs-on: windows-latest
+    environment: 软件发布
+    if: failure()
+    env:
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_IDS: ${{ vars.TELEGRAM_CHAT_IDS }}
+      TELEGRAM_RELEASE_COVER_URL: ${{ vars.TELEGRAM_RELEASE_COVER_URL }}
+      RELEASE_VERSION: ${{ github.ref_name }}
+      TELEGRAM_NOTIFY_MODE: failure
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22.12.0
+          cache: npm
+
+      - name: Notify Telegram failure
+        run: npm run notify:telegram
+        continue-on-error: true
