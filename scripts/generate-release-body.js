@@ -5,9 +5,51 @@ const rootDir = path.resolve(__dirname, '..')
 const releaseDir = path.join(rootDir, 'release')
 const contextPath = path.join(releaseDir, 'release-context.json')
 const outputPath = path.join(releaseDir, 'release-body.md')
-const aiApiKey = process.env.AI_API_KEY || ''
-const aiApiUrl = process.env.AI_API_URL || 'https://api.openai.com/v1/chat/completions'
-const aiModel = process.env.AI_MODEL || 'gpt-5.4'
+
+function parseEnvText(content) {
+  const result = {}
+  for (const line of String(content || '').split(/\r?\n/)) {
+    const trimmed = line.trim()
+    if (!trimmed || trimmed.startsWith('#')) continue
+    const eqIndex = trimmed.indexOf('=')
+    if (eqIndex <= 0) continue
+    const key = trimmed.slice(0, eqIndex).trim()
+    let value = trimmed.slice(eqIndex + 1).trim()
+    if (
+      (value.startsWith('"') && value.endsWith('"')) ||
+      (value.startsWith("'") && value.endsWith("'"))
+    ) {
+      value = value.slice(1, -1)
+    }
+    result[key] = value
+  }
+  return result
+}
+
+function loadLocalSecretEnv() {
+  const candidates = [
+    path.join(rootDir, '.release.local.env'),
+    path.join(rootDir, '.env.local')
+  ]
+
+  const merged = {}
+  for (const filePath of candidates) {
+    if (!fs.existsSync(filePath)) continue
+    try {
+      const parsed = parseEnvText(fs.readFileSync(filePath, 'utf8'))
+      Object.assign(merged, parsed)
+      console.log(`[ReleaseBody] Loaded local env file: ${path.basename(filePath)}`)
+    } catch (e) {
+      console.warn(`[ReleaseBody] Failed to read local env file: ${filePath}`, String(e))
+    }
+  }
+  return merged
+}
+
+const localSecrets = loadLocalSecretEnv()
+const aiApiKey = process.env.AI_API_KEY || localSecrets.AI_API_KEY || ''
+const aiApiUrl = process.env.AI_API_URL || localSecrets.AI_API_URL || 'https://api.openai.com/v1/chat/completions'
+const aiModel = process.env.AI_MODEL || localSecrets.AI_MODEL || 'gpt-5.4'
 
 const PRIMARY_AUTHOR_LOGINS = new Set(['ILoveBingLu'])
 const PRIMARY_AUTHOR_NAMES = new Set(['ILoveBingLu', 'BingLu', 'ILoveBinglu'])
@@ -128,8 +170,8 @@ async function generateAiBody(context) {
   const systemPrompt = [
     '你是一个发布说明撰写助手。',
     '只能基于输入中的 commits 和 pull requests 生成，不得编造任何功能或修复。',
-    '输出必须是中文 Markdown。',
-    '必须包含以下章节：',
+    '输出必须是中文 Markdown，风格尽量自然，不要机械复读。',
+    '为保证格式一致性：优先使用以下标题结构（即使某一类内容为空也要写出对应章节，并在该章节内标注“无/未检测到”）：',
     '## CipherTalk vX.Y.Z',
     '### 概览',
     '### 新增',
@@ -138,9 +180,12 @@ async function generateAiBody(context) {
     '### 感谢贡献者',
     '### 相关提交与 PR',
     '如果存在最低安全版本或封禁版本，增加 ### 升级提醒 章节。',
+    '分类建议：可参考提交标题前缀 feat/fix 做粗分类到 新增/修复；其余放到 调整（如果标题无法判断，就放到 调整）。',
+    '引用规则：',
     '有 PR 时优先引用 PR 标题；没有 PR 时才引用 commit 标题。',
-    '感谢规则：只有非主作者的 PR/commit 才出现在感谢段。',
-    '不要写模糊词，不要写猜测，不要写未在输入中出现的功能。'
+    '列表尽量短：最多每类列出 5 条最关键的标题；其余可在概览里用一句话说明总量。',
+    '感谢规则：只有非主作者的 PR/commit 才出现在感谢段；主作者按代码中的逻辑是 ILoveBingLu（及其大小写/拼写变体）相关。',
+    '不要写猜测：如果输入里没有足够信息，就用“无/未检测到”或“仅维护性发布”描述。'
   ].join('\n')
 
   const userPrompt = `请根据以下发布上下文为 ${context.tag} 生成标准化发布说明：\n\n${JSON.stringify(context, null, 2)}`

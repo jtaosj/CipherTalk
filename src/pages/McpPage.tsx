@@ -332,12 +332,14 @@ function McpPage() {
                 </Typography>
                 <Button
                   variant="contained"
-                  startIcon={<Save size={16} />}
                   onClick={handleSave}
                   disabled={loading || saving}
                   sx={{
+                    minWidth: 42,
+                    width: 42,
+                    height: 42,
                     borderRadius: '999px',
-                    px: 2.6,
+                    p: 0,
                     textTransform: 'none',
                     fontWeight: 700,
                     background: 'var(--primary-gradient)',
@@ -346,8 +348,10 @@ function McpPage() {
                       filter: 'brightness(0.98)',
                     },
                   }}
+                  title={saving ? '保存中...' : '保存配置'}
+                  aria-label={saving ? '保存中' : '保存配置'}
                 >
-                  {saving ? '保存中...' : '保存配置'}
+                  <Save size={16} />
                 </Button>
               </Stack>
 

@@ -1,6 +1,6 @@
 import { z } from 'zod'
 import { createToolError, createToolSuccess } from './result'
-import { getMcpConfigSnapshot, getMcpHealthPayload, getMcpStatusPayload } from './runtime'
+import { getMcpConfigSnapshot } from './runtime'
 import { McpReadService } from './service'
 import { MCP_CONTACT_KINDS, MCP_MESSAGE_KINDS } from './types'
 
@@ -12,7 +12,7 @@ export function registerCipherTalkMcpTools(server: any) {
     description: 'Return CipherTalk MCP health information.'
   }, async () => {
     try {
-      const payload = getMcpHealthPayload()
+      const payload = await readService.healthCheck()
       return createToolSuccess('CipherTalk MCP health is available.', payload)
     } catch (error) {
       return createToolError(error)
@@ -24,7 +24,7 @@ export function registerCipherTalkMcpTools(server: any) {
     description: 'Return CipherTalk MCP runtime and configuration status.'
   }, async () => {
     try {
-      const payload = getMcpStatusPayload()
+      const payload = await readService.getStatus()
       return createToolSuccess('CipherTalk MCP status loaded.', payload)
     } catch (error) {
       return createToolError(error)

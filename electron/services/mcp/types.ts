@@ -65,6 +65,7 @@ export interface McpLaunchConfig {
 
 export type McpErrorCode =
   | 'BAD_REQUEST'
+  | 'APP_NOT_RUNNING'
   | 'DB_NOT_READY'
   | 'SESSION_NOT_FOUND'
   | 'INTERNAL_ERROR'

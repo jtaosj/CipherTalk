@@ -1,5 +1,6 @@
 import { app, BrowserWindow, ipcMain, nativeTheme, protocol, net, Tray, Menu } from 'electron'
 import { join } from 'path'
+import { randomBytes } from 'crypto'
 import { readFileSync, existsSync, mkdirSync } from 'fs'
 import { autoUpdater } from 'electron-updater'
 import { DatabaseService } from './services/database'
@@ -27,7 +28,8 @@ import { voiceTranscribeServiceWhisper } from './services/voiceTranscribeService
 import { windowsHelloService, WindowsHelloResult } from './services/windowsHelloService'
 import { shortcutService } from './services/shortcutService'
 import { httpApiService } from './services/httpApiService'
-import { getMcpLaunchConfig as getMcpLaunchConfigForUi } from './services/mcp/runtime'
+import { getMcpLaunchConfig as getMcpLaunchConfigForUi, getMcpProxyConfig } from './services/mcp/runtime'
+import { mcpProxyService } from './services/mcp/proxyService'
 
 // 扩展 app 对象类型，添加 isQuitting 标志
 declare module 'electron' {
@@ -201,6 +203,7 @@ function createWindow() {
   dbService = new DatabaseService()
 
   logService = new LogService(configService)
+  mcpProxyService.setLogger(logService)
   autoUpdater.logger = {
     info(message: string) {
       logService?.info('AppUpdate', message)
@@ -3810,6 +3813,14 @@ app.on('certificate-error', (event, webContents, url, error, certificate, callba
 })
 
 app.whenReady().then(async () => {
+  if (!configService) {
+    configService = new ConfigService()
+  }
+
+  if (!configService.get('mcpProxyToken')) {
+    configService.set('mcpProxyToken', randomBytes(24).toString('hex'))
+  }
+
   // 注册自定义协议用于加载本地视频
   protocol.handle('local-video', (request) => {
     // 移除协议前缀并解码
@@ -3903,6 +3914,18 @@ app.whenReady().then(async () => {
     console.error('[HttpApi] 启动失败:', httpApiStartResult.error)
   }
 
+  const mcpProxyConfig = getMcpProxyConfig(configService)
+  mcpProxyService.applySettings({
+    host: mcpProxyConfig.host,
+    port: mcpProxyConfig.port,
+    token: mcpProxyConfig.token
+  })
+  const mcpProxyStartResult = await mcpProxyService.start()
+  if (!mcpProxyStartResult.success) {
+    console.error('[McpProxy] 启动失败:', mcpProxyStartResult.error)
+    logService?.error('McpProxy', '内部 MCP 代理启动失败', { error: mcpProxyStartResult.error })
+  }
+
   // 只有在配置完整时才创建主窗口
   // 如果配置不完整，checkAndConnectOnStartup 会创建引导窗口
   if (shouldShowSplash !== false || configService?.get('myWxid')) {
@@ -3943,6 +3966,9 @@ app.on('before-quit', () => {
   
   httpApiService.stop().catch((e) => {
     console.error('[HttpApi] 停止失败:', e)
+  })
+  mcpProxyService.stop().catch((e) => {
+    console.error('[McpProxy] 停止失败:', e)
   })
   // 关闭配置数据库连接
   configService?.close()

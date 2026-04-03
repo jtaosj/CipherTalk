@@ -7,8 +7,49 @@ const releaseDir = path.join(rootDir, 'release')
 const owner = process.env.GITHUB_REPOSITORY_OWNER || 'ILoveBingLu'
 const repo = (process.env.GITHUB_REPOSITORY || `${owner}/CipherTalk`).split('/')[1] || 'CipherTalk'
 const currentTag = process.env.RELEASE_TAG || process.env.GITHUB_REF_NAME || ''
-const ghToken = process.env.GH_TOKEN || ''
 const pkg = require(path.join(rootDir, 'package.json'))
+
+function parseEnvText(content) {
+  const result = {}
+  for (const line of String(content || '').split(/\r?\n/)) {
+    const trimmed = line.trim()
+    if (!trimmed || trimmed.startsWith('#')) continue
+    const eqIndex = trimmed.indexOf('=')
+    if (eqIndex <= 0) continue
+    const key = trimmed.slice(0, eqIndex).trim()
+    let value = trimmed.slice(eqIndex + 1).trim()
+    if (
+      (value.startsWith('"') && value.endsWith('"')) ||
+      (value.startsWith("'") && value.endsWith("'"))
+    ) {
+      value = value.slice(1, -1)
+    }
+    result[key] = value
+  }
+  return result
+}
+
+function loadLocalSecretEnv() {
+  const candidates = [
+    path.join(rootDir, '.release.local.env'),
+    path.join(rootDir, '.env.local')
+  ]
+  const merged = {}
+  for (const filePath of candidates) {
+    if (!fs.existsSync(filePath)) continue
+    try {
+      const parsed = parseEnvText(fs.readFileSync(filePath, 'utf8'))
+      Object.assign(merged, parsed)
+      console.log(`[ReleaseContext] Loaded local env file: ${path.basename(filePath)}`)
+    } catch (e) {
+      console.warn(`[ReleaseContext] Failed to read local env file: ${filePath}`, String(e))
+    }
+  }
+  return merged
+}
+
+const localSecrets = loadLocalSecretEnv()
+const ghToken = process.env.GH_TOKEN || localSecrets.GH_TOKEN || ''
 
 function runGit(command) {
   return execSync(command, {
@@ -49,7 +90,10 @@ function getPreviousTag() {
 
 function getCommitRange(previousTag, tag) {
   if (!tag) return 'HEAD'
-  if (!previousTag || previousTag === tag) return tag
+  // 如果上一标签拿不到（例如 checkout 浅克隆/无 tags），则退化成取 tag 前最近 50 次提交，
+  // 避免 release-context 里 commits/pullRequests 为空，导致后续 AI 发布说明内容很少。
+  if (!previousTag) return `${tag}~50..${tag}`
+  if (previousTag === tag) return tag
   return `${previousTag}..${tag}`
 }
 

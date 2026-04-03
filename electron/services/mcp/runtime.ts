@@ -6,6 +6,16 @@ import type { McpHealthPayload, McpLaunchConfig, McpLauncherMode, McpStatusPaylo
 import { MCP_TOOL_NAMES } from './types'
 
 const MCP_SERVICE_NAME = 'ciphertalk-mcp'
+export const DEFAULT_MCP_PROXY_PORT = 5032
+export const DEFAULT_MCP_PROXY_TIMEOUT_MS = 30000
+
+export interface McpProxyConfig {
+  host: '127.0.0.1'
+  port: number
+  url: string
+  token: string
+  timeoutMs: number
+}
 
 function cleanAccountDirName(dirName: string): string {
   const trimmed = dirName.trim()
@@ -101,6 +111,12 @@ function getRuntimeWarnings(config: { mcpEnabled: boolean; dbReady: boolean }): 
   return warnings
 }
 
+function parsePositiveInt(value: unknown, fallback: number): number {
+  const parsed = Number(value)
+  if (!Number.isFinite(parsed) || parsed <= 0) return fallback
+  return Math.floor(parsed)
+}
+
 export function getPackagedLauncherPath(): string {
   return join(dirname(getExePath()), 'ciphertalk-mcp.cmd')
 }
@@ -146,6 +162,35 @@ export function getMcpConfigSnapshot() {
     }
   } finally {
     configService.close()
+  }
+}
+
+export function getMcpProxyConfig(config?: ConfigService): McpProxyConfig {
+  const configService = config || new ConfigService()
+
+  try {
+    const host = '127.0.0.1' as const
+    const port = parsePositiveInt(
+      process.env.CIPHERTALK_MCP_PROXY_PORT || configService.get('mcpProxyPort'),
+      DEFAULT_MCP_PROXY_PORT
+    )
+    const token = String(process.env.CIPHERTALK_MCP_PROXY_TOKEN || configService.get('mcpProxyToken') || '')
+    const timeoutMs = parsePositiveInt(
+      process.env.CIPHERTALK_MCP_PROXY_TIMEOUT_MS,
+      DEFAULT_MCP_PROXY_TIMEOUT_MS
+    )
+
+    return {
+      host,
+      port,
+      url: process.env.CIPHERTALK_MCP_PROXY_URL || `http://${host}:${port}`,
+      token,
+      timeoutMs
+    }
+  } finally {
+    if (!config) {
+      configService.close()
+    }
   }
 }
 

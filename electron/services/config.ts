@@ -79,6 +79,8 @@ interface ConfigSchema {
   aiMessageLimit: number     // 摘要提取的消息条数限制
   mcpEnabled: boolean
   mcpExposeMediaPaths: boolean
+  mcpProxyPort: number
+  mcpProxyToken: string
 }
 
 const defaults: ConfigSchema = {
@@ -124,7 +126,9 @@ const defaults: ConfigSchema = {
   aiEnableThinking: true,  // 默认显示思考过程
   aiMessageLimit: 3000,    // 默认3000条，用户可调至5000
   mcpEnabled: false,
-  mcpExposeMediaPaths: true
+  mcpExposeMediaPaths: true,
+  mcpProxyPort: 5032,
+  mcpProxyToken: ''
 }
 
 export class ConfigService {

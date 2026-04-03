@@ -17,6 +17,30 @@ git push origin v2.2.14
 
 只有推送 `v*` 标签时，GitHub Actions 才会自动构建和发布。
 
+## 本地测试（不提交密钥）
+
+发布相关脚本支持从本地私有环境文件读取密钥与模型配置，读取顺序为：
+
+1. 进程环境变量（例如手动 `set` / CI 注入）
+2. 仓库根目录 `.release.local.env`
+3. 仓库根目录 `.env.local`
+
+可用键（按需填写）：
+
+- `AI_API_KEY`
+- `AI_API_URL`
+- `AI_MODEL`
+- `GH_TOKEN`
+
+示例（文件不会被提交）：
+
+```env
+AI_API_KEY=sk-xxxx
+AI_API_URL=https://api.openai.com/v1/chat/completions
+AI_MODEL=gpt-5.4
+GH_TOKEN=ghp_xxxx
+```
+
 ## GitHub Actions 会做什么
 
 `.github/workflows/release.yml` 会在 `v*` 标签触发后执行：
