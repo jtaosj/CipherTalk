@@ -1,19 +1,20 @@
 {
   "name": "ciphertalk",
-  "version": "2.3.4",
+  "version": "3.0.1",
   "description": "密语 - 微信聊天记录查看工具",
   "author": "ILoveBingLu",
   "license": "CC-BY-NC-SA-4.0",
   "main": "dist-electron/main.js",
   "scripts": {
     "dev": "vite",
-    "prebuild": "node scripts/update-readme-version.js",
+    "prebuild": "node scripts/update-readme-version.js && node scripts/prepare-release-announcement.js",
     "build": "tsc && vite build && electron-builder && node scripts/add-size-to-yml.js",
-    "build:ci": "tsc && vite build && electron-builder --publish never && node scripts/add-size-to-yml.js",
+    "build:ci": "node scripts/prepare-release-announcement.js && tsc && vite build && electron-builder --publish never && node scripts/add-size-to-yml.js",
     "build:mcp": "tsc && vite build",
     "build:force-update-manifest": "node scripts/generate-force-update-manifest.js",
     "build:release-context": "node scripts/generate-release-context.js",
     "build:release-body": "node scripts/generate-release-body.js",
+    "build:release-announcement": "node scripts/prepare-release-announcement.js",
     "notify:telegram": "node scripts/send-telegram-release.js",
     "mcp": "node scripts/mcp-runner.js",
     "mcp:probe": "node scripts/mcp-probe.js",
@@ -95,12 +96,12 @@
       "repo": "CipherTalk"
     },
     "win": {
-      "icon": "public/xinnian.ico",
+      "icon": "public/icon.ico",
       "target": "nsis",
       "requestedExecutionLevel": "asInvoker"
     },
     "nsis": {
-      "differentialPackage": true,
+      "differentialPackage": false,
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
@@ -112,9 +113,9 @@
       "language": "2052",
       "displayLanguageSelector": false,
       "include": "installer.nsh",
-      "installerIcon": "public/xinnian.ico",
-      "uninstallerIcon": "public/xinnian.ico",
-      "installerHeaderIcon": "public/xinnian.ico",
+      "installerIcon": "public/icon.ico",
+      "uninstallerIcon": "public/icon.ico",
+      "installerHeaderIcon": "public/icon.ico",
       "perMachine": false,
       "allowElevation": true,
       "installerSidebar": null,
@@ -143,6 +144,10 @@
       {
         "from": "public/xinnian.ico",
         "to": "xinnian.ico"
+      },
+      {
+        "from": ".tmp/release-announcement.json",
+        "to": "release-announcement.json"
       }
     ],
     "extraFiles": [

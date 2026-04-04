@@ -62,7 +62,7 @@ protocol.registerSchemesAsPrivileged([
 // 配置自动更新
 autoUpdater.autoDownload = false
 autoUpdater.autoInstallOnAppQuit = true
-autoUpdater.disableDifferentialDownload = false  // 启用差分更新，失败时由 electron-updater 回退完整包
+autoUpdater.disableDifferentialDownload = true  // 禁用差分更新，统一使用全量安装包
 
 // 单例服务
 let dbService: DatabaseService | null = null
@@ -93,6 +93,64 @@ let welcomeWindow: BrowserWindow | null = null
 // 聊天记录窗口实例
 let chatHistoryWindow: BrowserWindow | null = null
 const allowDevTools = !!process.env.VITE_DEV_SERVER_URL
+
+type ReleaseAnnouncementPayload = {
+  version: string
+  releaseBody?: string
+  releaseNotes?: string
+  generatedAt?: string
+}
+
+function getReleaseAnnouncementPath(): string {
+  const isDev = !!process.env.VITE_DEV_SERVER_URL
+  return isDev
+    ? join(__dirname, '../.tmp/release-announcement.json')
+    : join(process.resourcesPath, 'release-announcement.json')
+}
+
+function syncPackagedReleaseAnnouncement() {
+  if (!configService) return
+
+  const announcementPath = getReleaseAnnouncementPath()
+  if (!existsSync(announcementPath)) {
+    return
+  }
+
+  try {
+    const raw = readFileSync(announcementPath, 'utf8')
+    const payload = JSON.parse(raw) as ReleaseAnnouncementPayload
+    if (!payload || typeof payload !== 'object') return
+
+    const version = String(payload.version || '').trim()
+    if (!version || version !== app.getVersion()) return
+
+    const releaseBody = String(payload.releaseBody || '').trim()
+    const releaseNotes = String(payload.releaseNotes || '').trim()
+
+    const storedVersion = configService.get('releaseAnnouncementVersion')
+    const storedBody = configService.get('releaseAnnouncementBody')
+    const storedNotes = configService.get('releaseAnnouncementNotes')
+
+    if (
+      storedVersion === version &&
+      storedBody === releaseBody &&
+      storedNotes === releaseNotes
+    ) {
+      return
+    }
+
+    configService.set('releaseAnnouncementVersion', version)
+    configService.set('releaseAnnouncementBody', releaseBody)
+    configService.set('releaseAnnouncementNotes', releaseNotes)
+    logService?.info('ReleaseAnnouncement', '已同步本地版本公告', {
+      version,
+      hasBody: Boolean(releaseBody),
+      hasNotes: Boolean(releaseNotes)
+    })
+  } catch (error) {
+    logService?.warn('ReleaseAnnouncement', '同步本地版本公告失败', { error: String(error) })
+  }
+}
 
 /**
  * 获取当前主题的 URL 查询参数
@@ -203,6 +261,7 @@ function createWindow() {
   dbService = new DatabaseService()
 
   logService = new LogService(configService)
+  syncPackagedReleaseAnnouncement()
   mcpProxyService.setLogger(logService)
   autoUpdater.logger = {
     info(message: string) {
@@ -1366,6 +1425,14 @@ function registerIpcHandlers() {
 
   ipcMain.handle('app:downloadAndInstall', async (event) => {
     const win = BrowserWindow.fromWebContents(event.sender)
+
+    if (isInstallingUpdate) {
+      logService?.warn('AppUpdate', '下载更新请求被忽略，当前已有下载任务进行中', {
+        targetVersion: appUpdateService.getCachedUpdateInfo()?.version
+      })
+      return
+    }
+
     isInstallingUpdate = true
     const cachedUpdateInfo = appUpdateService.getCachedUpdateInfo()
     const targetVersion = cachedUpdateInfo?.version
@@ -1382,7 +1449,15 @@ function registerIpcHandlers() {
     logService?.info('AppUpdate', '开始下载更新', { targetVersion, differentialEnabled: !autoUpdater.disableDifferentialDownload })
 
     const onDownloadProgress = (progress: Electron.ProgressInfo) => {
-      win?.webContents.send('app:downloadProgress', progress.percent)
+      const payload = {
+        percent: progress.percent,
+        transferred: progress.transferred,
+        total: progress.total,
+        bytesPerSecond: progress.bytesPerSecond
+      }
+      BrowserWindow.getAllWindows().forEach(currentWindow => {
+        currentWindow.webContents.send('app:downloadProgress', payload)
+      })
       appUpdateService.updateDiagnostics({
         phase: 'downloading',
         progressPercent: progress.percent,
@@ -1411,6 +1486,7 @@ function registerIpcHandlers() {
     }
 
     const onUpdaterError = (error: Error) => {
+      isInstallingUpdate = false
       appUpdateService.updateDiagnostics({
         phase: 'failed',
         lastError: String(error),

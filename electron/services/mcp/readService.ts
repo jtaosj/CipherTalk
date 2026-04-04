@@ -1,10 +1,11 @@
-import { existsSync, mkdirSync } from 'fs'
+import { accessSync, constants, existsSync, mkdirSync } from 'fs'
 import { writeFile } from 'fs/promises'
 import { join } from 'path'
 import { z } from 'zod'
 import { analyticsService } from '../analyticsService'
 import { chatService, type ChatSession, type ContactInfo, type Message } from '../chatService'
 import { ConfigService } from '../config'
+import { exportService, type ExportOptions as ExportServiceOptions } from '../exportService'
 import { imageDecryptService } from '../imageDecryptService'
 import { videoService } from '../videoService'
 import { McpToolError } from './result'
@@ -15,6 +16,11 @@ import {
   type McpContactKind,
   type McpContactsPayload,
   type McpCursor,
+  type McpExportChatPayload,
+  type McpExportDateRange,
+  type McpExportFormat,
+  type McpExportMediaOptions,
+  type McpExportMissingField,
   type McpGlobalStatisticsPayload,
   type McpContactRankingItem,
   type McpContactRankingsPayload,
@@ -24,8 +30,12 @@ import {
   type McpMessageMatchField,
   type McpSearchMatchMode,
   type McpMessagesPayload,
+  type McpStreamPartialPayloadMap,
+  type McpStreamProgressPayload,
   type McpSearchHit,
   type McpSearchMessagesPayload,
+  type McpResolveSessionPayload,
+  type McpResolvedSessionCandidate,
   type McpSessionContextPayload,
   type McpSessionItem,
   type McpSessionKind,
@@ -46,6 +56,38 @@ const listSessionsArgsSchema = z.object({
   offset: z.number().int().nonnegative().optional(),
   limit: z.number().int().positive().optional(),
   unreadOnly: z.boolean().optional()
+})
+
+const resolveSessionArgsSchema = z.object({
+  query: z.string().trim().min(1),
+  limit: z.number().int().positive().optional()
+})
+
+const exportChatArgsSchema = z.object({
+  sessionId: z.string().trim().min(1).optional(),
+  query: z.string().trim().min(1).optional(),
+  format: z.enum(['chatlab', 'chatlab-jsonl', 'json', 'excel', 'html']).optional(),
+  dateRange: z.object({
+    start: z.number().int().positive(),
+    end: z.number().int().positive()
+  }).optional(),
+  mediaOptions: z.object({
+    exportAvatars: z.boolean().optional(),
+    exportImages: z.boolean().optional(),
+    exportVideos: z.boolean().optional(),
+    exportEmojis: z.boolean().optional(),
+    exportVoices: z.boolean().optional()
+  }).optional(),
+  outputDir: z.string().trim().min(1).optional(),
+  validateOnly: z.boolean().optional()
+}).superRefine((value, ctx) => {
+  if (!value.sessionId && !value.query) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['sessionId'],
+      message: 'sessionId or query is required'
+    })
+  }
 })
 
 const getMessagesArgsSchema = z.object({
@@ -116,6 +158,8 @@ const getSessionContextArgsSchema = z.object({
 })
 
 type ListSessionsArgs = z.infer<typeof listSessionsArgsSchema>
+type ResolveSessionArgs = z.infer<typeof resolveSessionArgsSchema>
+type ExportChatArgs = z.infer<typeof exportChatArgsSchema>
 type GetMessagesArgs = z.infer<typeof getMessagesArgsSchema>
 type ListContactsArgs = z.infer<typeof listContactsArgsSchema>
 type SearchMessagesArgs = z.infer<typeof searchMessagesArgsSchema>
@@ -125,6 +169,19 @@ type MessageNormalizeOptions = {
   includeMediaPaths: boolean
   includeRaw: boolean
 }
+type McpContactRef = {
+  contactId: string
+  sessionId: string
+  displayName: string
+  remark?: string
+  nickname?: string
+  kind: McpContactKind
+}
+type McpSessionLookupEntry = {
+  session: McpSessionRef
+  aliases: string[]
+}
+type ScoredSessionCandidate = { entry: McpSessionLookupEntry; score: number }
 type SearchRawHit = {
   session: McpSessionRef
   message: Message
@@ -132,6 +189,12 @@ type SearchRawHit = {
   excerpt: string
   score: number
 }
+type McpStreamReporter = {
+  progress?: (payload: McpStreamProgressPayload) => void | Promise<void>
+  partial?: <K extends keyof McpStreamPartialPayloadMap>(toolName: K, payload: McpStreamPartialPayloadMap[K]) => void | Promise<void>
+}
+
+const SUPPORTED_EXPORT_FORMATS: McpExportFormat[] = ['chatlab', 'chatlab-jsonl', 'json', 'excel', 'html']
 
 function toTimestampMs(value?: number | null): number {
   if (!value || !Number.isFinite(value) || value <= 0) return 0
@@ -341,10 +404,23 @@ function toSessionItem(session: ChatSession): McpSessionItem {
   }
 }
 
-function toContactItem(contact: ContactWithLastContact): McpContactItem {
+function toContactRef(contact: ContactWithLastContact): McpContactRef {
+  return {
+    contactId: contact.username,
+    sessionId: contact.username,
+    displayName: contact.displayName,
+    remark: contact.remark || undefined,
+    nickname: contact.nickname || undefined,
+    kind: contact.type as McpContactKind
+  }
+}
+
+function toContactItem(contact: ContactWithLastContact, hasSession: boolean): McpContactItem {
   const lastContactTimestamp = Number(contact.lastContactTime || 0)
   return {
     contactId: contact.username,
+    sessionId: contact.username,
+    hasSession,
     displayName: contact.displayName,
     remark: contact.remark || undefined,
     nickname: contact.nickname || undefined,
@@ -354,11 +430,463 @@ function toContactItem(contact: ContactWithLastContact): McpContactItem {
   }
 }
 
-function resolveSessionRef(sessionId: string, sessionMap: Map<string, McpSessionRef>): McpSessionRef {
-  return sessionMap.get(sessionId) || {
-    sessionId,
-    displayName: sessionId,
-    kind: detectSessionKind(sessionId)
+function buildContactSearchKeys(contact: McpContactRef): string[] {
+  return [
+    contact.contactId,
+    contact.sessionId,
+    contact.displayName,
+    contact.remark || '',
+    contact.nickname || ''
+  ]
+    .map((value) => String(value || '').trim())
+    .filter(Boolean)
+}
+
+function uniqueStrings(values: string[]): string[] {
+  const seen = new Set<string>()
+  const result: string[] = []
+  for (const value of values) {
+    const trimmed = String(value || '').trim()
+    if (!trimmed) continue
+    const normalized = normalizeQuery(trimmed)
+    if (!normalized || seen.has(normalized)) continue
+    seen.add(normalized)
+    result.push(trimmed)
+  }
+  return result
+}
+
+function isSubsequence(query: string, target: string): boolean {
+  let qi = 0
+  let ti = 0
+  while (qi < query.length && ti < target.length) {
+    if (query[qi] === target[ti]) qi += 1
+    ti += 1
+  }
+  return qi === query.length
+}
+
+function scoreLookupValue(query: string, rawTarget: string): number {
+  const target = normalizeQuery(rawTarget)
+  if (!query || !target) return 0
+  if (target === query) return 1000
+  if (target.startsWith(query)) return 820 + Math.min(query.length * 8, 120)
+  if (target.includes(query)) return 640 + Math.min(query.length * 6, 100) - Math.min(Math.max(target.length - query.length, 0), 80)
+  if (query.startsWith(target)) return 420 + Math.min(target.length * 5, 80)
+  if (isSubsequence(query, target)) return 260 + Math.min(query.length * 4, 60)
+  return 0
+}
+
+function buildSessionLookupEntries(
+  sessions: McpSessionItem[],
+  contacts: McpContactRef[]
+): McpSessionLookupEntry[] {
+  const entryMap = new Map<string, McpSessionLookupEntry>()
+
+  for (const session of sessions) {
+    entryMap.set(session.sessionId, {
+      session: {
+        sessionId: session.sessionId,
+        displayName: session.displayName,
+        kind: session.kind
+      },
+      aliases: uniqueStrings([session.sessionId, session.displayName])
+    })
+  }
+
+  for (const contact of contacts) {
+    const entry = entryMap.get(contact.sessionId)
+    if (!entry) continue
+    entry.aliases = uniqueStrings([
+      ...entry.aliases,
+      contact.contactId,
+      contact.displayName,
+      contact.remark || '',
+      contact.nickname || ''
+    ])
+  }
+
+  return Array.from(entryMap.values())
+}
+
+function formatSessionCandidateHint(rawInput: string, candidates: McpSessionLookupEntry[]): string {
+  if (candidates.length === 0) {
+    return `未找到与“${rawInput}”匹配的会话。可先用 list_sessions 或 list_contacts 做泛搜索。`
+  }
+
+  const preview = candidates
+    .slice(0, 5)
+    .map((candidate) => `- ${candidate.session.displayName} (${candidate.session.sessionId})`)
+    .join('\n')
+
+  return `“${rawInput}”匹配到多个候选，请改用更具体的信息重试：\n${preview}`
+}
+
+async function reportProgress(reporter: McpStreamReporter | undefined, payload: McpStreamProgressPayload): Promise<void> {
+  await reporter?.progress?.(payload)
+}
+
+async function reportPartial<K extends keyof McpStreamPartialPayloadMap>(
+  reporter: McpStreamReporter | undefined,
+  toolName: K,
+  payload: McpStreamPartialPayloadMap[K]
+): Promise<void> {
+  await reporter?.partial?.(toolName, payload)
+}
+
+async function getContactCatalog(): Promise<{ items: McpContactRef[]; map: Map<string, McpContactRef> }> {
+  const result = await chatService.getContacts()
+  if (!result.success) {
+    mapChatError(result.error)
+  }
+
+  const items = (result.contacts || []).map((contact) => toContactRef(contact as ContactWithLastContact))
+  const map = new Map<string, McpContactRef>()
+
+  for (const item of items) {
+    for (const key of buildContactSearchKeys(item)) {
+      map.set(normalizeQuery(key), item)
+    }
+  }
+
+  return { items, map }
+}
+
+function tryResolveContactRef(
+  rawValue: string,
+  contactMap: Map<string, McpContactRef>
+): McpContactRef | null {
+  const normalized = normalizeQuery(rawValue)
+  if (!normalized) return null
+
+  const exact = contactMap.get(normalized)
+  if (exact) return exact
+
+  const partialMatches = Array.from(new Set(
+    Array.from(contactMap.values()).filter((contact) =>
+      buildContactSearchKeys(contact).some((value) => normalizeQuery(value).includes(normalized))
+    )
+  )) as McpContactRef[]
+
+  return partialMatches.length === 1 ? partialMatches[0] : null
+}
+
+function findSessionCandidates(
+  rawInput: string,
+  sessions: McpSessionItem[],
+  contacts: McpContactRef[]
+): ScoredSessionCandidate[] {
+  const query = normalizeQuery(rawInput)
+  if (!query) return []
+
+  return buildSessionLookupEntries(sessions, contacts)
+    .map((entry) => ({
+      entry,
+      score: Math.max(...entry.aliases.map((alias) => scoreLookupValue(query, alias)), 0)
+    }))
+    .filter((item) => item.score > 0)
+    .sort((a, b) => b.score - a.score || a.entry.session.displayName.localeCompare(b.entry.session.displayName, 'zh-CN'))
+}
+
+function toCandidateConfidence(score: number): 'high' | 'medium' | 'low' {
+  if (score >= 1000 || score >= 820) return 'high'
+  if (score >= 640) return 'medium'
+  return 'low'
+}
+
+function buildCandidateEvidence(candidate: ScoredSessionCandidate, query: string): string[] {
+  const normalizedQuery = normalizeQuery(query)
+  const evidence: string[] = []
+
+  for (const alias of candidate.entry.aliases) {
+    const normalizedAlias = normalizeQuery(alias)
+    if (!normalizedAlias) continue
+    if (normalizedAlias === normalizedQuery) {
+      evidence.push(`Exact alias match: ${alias}`)
+    } else if (normalizedAlias.startsWith(normalizedQuery)) {
+      evidence.push(`Prefix alias match: ${alias}`)
+    } else if (normalizedAlias.includes(normalizedQuery)) {
+      evidence.push(`Fuzzy alias match: ${alias}`)
+    } else if (isSubsequence(normalizedQuery, normalizedAlias)) {
+      evidence.push(`Subsequence alias match: ${alias}`)
+    }
+
+    if (evidence.length >= 3) break
+  }
+
+  if (candidate.score >= 1000) {
+    evidence.push('High-confidence score from exact resolution.')
+  } else if (candidate.score >= 820) {
+    evidence.push('High-confidence score from strong fuzzy match.')
+  } else if (candidate.score >= 640) {
+    evidence.push('Medium-confidence score from partial fuzzy match.')
+  }
+
+  return uniqueStrings(evidence).slice(0, 4)
+}
+
+function toResolvedCandidate(candidate: ScoredSessionCandidate, query: string): McpResolvedSessionCandidate {
+  return {
+    ...candidate.entry.session,
+    score: candidate.score,
+    confidence: toCandidateConfidence(candidate.score),
+    aliases: candidate.entry.aliases,
+    evidence: buildCandidateEvidence(candidate, query)
+  }
+}
+
+function buildSearchSessionSummaries(hits: McpSearchHit[]): McpSearchMessagesPayload['sessionSummaries'] {
+  const grouped = new Map<string, {
+    session: McpSessionRef
+    hitCount: number
+    topScore: number
+    sampleExcerpts: string[]
+  }>()
+
+  for (const hit of hits) {
+    const key = hit.session.sessionId
+    const existing = grouped.get(key)
+    if (!existing) {
+      grouped.set(key, {
+        session: hit.session,
+        hitCount: 1,
+        topScore: hit.score,
+        sampleExcerpts: hit.excerpt ? [hit.excerpt] : []
+      })
+      continue
+    }
+
+    existing.hitCount += 1
+    existing.topScore = Math.max(existing.topScore, hit.score)
+    if (hit.excerpt && existing.sampleExcerpts.length < 2 && !existing.sampleExcerpts.includes(hit.excerpt)) {
+      existing.sampleExcerpts.push(hit.excerpt)
+    }
+  }
+
+  return Array.from(grouped.values())
+    .sort((a, b) => b.hitCount - a.hitCount || b.topScore - a.topScore)
+}
+
+function getDefaultExportPath(): string | null {
+  const config = new ConfigService()
+  try {
+    const exportPath = String(config.get('exportPath') || '').trim()
+    return exportPath || null
+  } finally {
+    config.close()
+  }
+}
+
+function isWritableDirectory(dir: string): boolean {
+  try {
+    if (!dir) return false
+    if (!existsSync(dir)) {
+      mkdirSync(dir, { recursive: true })
+    }
+    accessSync(dir, constants.W_OK)
+    return true
+  } catch {
+    return false
+  }
+}
+
+function isCompleteMediaOptions(
+  mediaOptions?: ExportChatArgs['mediaOptions']
+): mediaOptions is McpExportMediaOptions {
+  return Boolean(
+    mediaOptions
+    && typeof mediaOptions.exportAvatars === 'boolean'
+    && typeof mediaOptions.exportImages === 'boolean'
+    && typeof mediaOptions.exportVideos === 'boolean'
+    && typeof mediaOptions.exportEmojis === 'boolean'
+    && typeof mediaOptions.exportVoices === 'boolean'
+  )
+}
+
+function getNextExportQuestion(missingFields: McpExportMissingField[]): string | undefined {
+  if (missingFields.includes('session')) {
+    return '请先确认要导出哪个会话，可以提供 sessionId 或更具体的联系人线索。'
+  }
+  if (missingFields.includes('dateRange')) {
+    return '请补充导出的时间范围，至少需要开始时间和结束时间。'
+  }
+  if (missingFields.includes('format')) {
+    return '请确认导出格式，仅支持 chatlab、chatlab-jsonl、json、excel、html。'
+  }
+  if (missingFields.includes('mediaOptions')) {
+    return '请明确是否导出头像、图片、视频、表情、语音。'
+  }
+  if (missingFields.includes('outputDir')) {
+    return '默认导出目录不可用，请提供一个可写入的导出目录。'
+  }
+  return undefined
+}
+
+function buildExportFollowUpQuestions(missingFields: McpExportMissingField[]): Array<{
+  field: McpExportMissingField
+  question: string
+}> {
+  const questions: Array<{ field: McpExportMissingField; question: string }> = []
+
+  for (const field of missingFields) {
+    if (field === 'session') {
+      questions.push({
+        field,
+        question: '你要导出哪个会话？可以给我更具体的联系人、备注名或 sessionId。'
+      })
+    } else if (field === 'dateRange') {
+      questions.push({
+        field,
+        question: '这次导出的时间范围是什么？请给我开始时间和结束时间。'
+      })
+    } else if (field === 'format') {
+      questions.push({
+        field,
+        question: '你要导出成哪种格式？目前支持 chatlab、chatlab-jsonl、json、excel、html。'
+      })
+    } else if (field === 'mediaOptions') {
+      questions.push({
+        field,
+        question: '媒体要怎么导？请分别确认是否包含头像、图片、视频、表情、语音。'
+      })
+    } else if (field === 'outputDir') {
+      questions.push({
+        field,
+        question: '默认导出目录不可用，请给我一个可写入的导出目录。'
+      })
+    }
+  }
+
+  return questions
+}
+
+function buildPredictedExportPath(
+  outputDir: string,
+  resolvedSession: Pick<McpResolvedSessionCandidate, 'displayName'>,
+  format: McpExportFormat,
+  mediaOptions: McpExportMediaOptions
+): string {
+  const safeName = resolvedSession.displayName.replace(/[<>:"/\\|?*]/g, '_').replace(/\.+$/, '').trim() || 'export'
+  const ext = format === 'chatlab-jsonl'
+    ? '.jsonl'
+    : format === 'excel'
+      ? '.xlsx'
+      : format === 'html'
+        ? '.html'
+        : '.json'
+  const hasMedia = mediaOptions.exportImages || mediaOptions.exportVideos || mediaOptions.exportEmojis || mediaOptions.exportVoices
+  const sessionOutputDir = hasMedia ? join(outputDir, safeName) : outputDir
+  return join(sessionOutputDir, `${safeName}${ext}`)
+}
+
+function toExportServiceOptions(
+  format: McpExportFormat,
+  dateRange: McpExportDateRange,
+  mediaOptions: McpExportMediaOptions
+): ExportServiceOptions {
+  return {
+    format,
+    dateRange,
+    exportAvatars: mediaOptions.exportAvatars,
+    exportImages: mediaOptions.exportImages,
+    exportVideos: mediaOptions.exportVideos,
+    exportEmojis: mediaOptions.exportEmojis,
+    exportVoices: mediaOptions.exportVoices
+  }
+}
+
+function resolveSessionRefStrict(
+  rawInput: string,
+  sessions: McpSessionItem[],
+  sessionMap: Map<string, McpSessionRef>,
+  contacts: McpContactRef[],
+  contactMap: Map<string, McpContactRef>
+): McpSessionRef {
+  const direct = resolveSessionRef(rawInput, sessionMap, contactMap)
+  if (sessionMap.has(direct.sessionId)) {
+    return direct
+  }
+
+  const candidates = findSessionCandidates(rawInput, sessions, contacts)
+  if (candidates.length === 0) {
+    throw new McpToolError('SESSION_NOT_FOUND', 'Session not found.', formatSessionCandidateHint(rawInput, []))
+  }
+
+  const [first, second] = candidates
+  if (candidates.length === 1 || !second || first.score - second.score >= 140 || first.score >= 1000) {
+    return first.entry.session
+  }
+
+  throw new McpToolError('BAD_REQUEST', 'Session is ambiguous.', formatSessionCandidateHint(
+    rawInput,
+    candidates.map((item) => item.entry)
+  ))
+}
+
+async function resolveSessionRefStrictWithProgress(
+  rawInput: string,
+  sessions: McpSessionItem[],
+  sessionMap: Map<string, McpSessionRef>,
+  contacts: McpContactRef[],
+  contactMap: Map<string, McpContactRef>,
+  reporter?: McpStreamReporter
+): Promise<McpSessionRef> {
+  await reportProgress(reporter, {
+    stage: 'resolving_input',
+    message: `Resolving session reference from "${rawInput}".`
+  })
+  await reportProgress(reporter, {
+    stage: 'searching_contacts',
+    message: 'Searching contacts and aliases.'
+  })
+  await reportProgress(reporter, {
+    stage: 'searching_sessions',
+    message: 'Searching sessions and recent conversation entries.'
+  })
+
+  const direct = resolveSessionRef(rawInput, sessionMap, contactMap)
+  if (sessionMap.has(direct.sessionId)) {
+    await reportProgress(reporter, {
+      stage: 'resolving_candidates',
+      message: `Resolved to ${direct.displayName}.`,
+      candidates: [direct],
+      candidateCount: 1
+    })
+    return direct
+  }
+
+  const candidates = findSessionCandidates(rawInput, sessions, contacts)
+  await reportProgress(reporter, {
+    stage: 'resolving_candidates',
+    message: candidates.length > 0 ? `Found ${candidates.length} candidate sessions.` : 'No candidate sessions found.',
+    candidates: candidates.slice(0, 5).map((item) => item.entry.session),
+    candidateCount: candidates.length
+  })
+
+  return resolveSessionRefStrict(rawInput, sessions, sessionMap, contacts, contactMap)
+}
+
+function resolveSessionRef(
+  rawSessionId: string,
+  sessionMap: Map<string, McpSessionRef>,
+  contactMap?: Map<string, McpContactRef>
+): McpSessionRef {
+  const directSession = sessionMap.get(rawSessionId)
+  if (directSession) return directSession
+
+  const contact = contactMap ? tryResolveContactRef(rawSessionId, contactMap) : null
+  if (contact) {
+    return sessionMap.get(contact.sessionId) || {
+      sessionId: contact.sessionId,
+      displayName: contact.displayName || contact.sessionId,
+      kind: detectSessionKind(contact.sessionId)
+    }
+  }
+
+  return {
+    sessionId: rawSessionId,
+    displayName: rawSessionId,
+    kind: detectSessionKind(rawSessionId)
   }
 }
 
@@ -632,7 +1160,225 @@ function messageMatchesFilters(
 }
 
 export class McpReadService {
-  async listSessions(rawArgs: ListSessionsArgs): Promise<McpSessionsPayload> {
+  async resolveSession(rawArgs: ResolveSessionArgs, reporter?: McpStreamReporter): Promise<McpResolveSessionPayload> {
+    const args = resolveSessionArgsSchema.safeParse(rawArgs)
+    if (!args.success) {
+      throw new McpToolError('BAD_REQUEST', 'Invalid resolve_session arguments.', args.error.message)
+    }
+
+    const limit = Math.min(args.data.limit ?? 5, 10)
+    const [{ items: sessions, map: sessionMap }, { items: contacts, map: contactMap }] = await Promise.all([
+      getSessionCatalog(),
+      getContactCatalog()
+    ])
+
+    await reportProgress(reporter, {
+      stage: 'resolving_input',
+      message: `Resolving session candidates for "${args.data.query}".`
+    })
+
+    const direct = resolveSessionRef(args.data.query, sessionMap, contactMap)
+    let candidates = findSessionCandidates(args.data.query, sessions, contacts)
+
+    if (sessionMap.has(direct.sessionId) && !candidates.some((item) => item.entry.session.sessionId === direct.sessionId)) {
+      const directEntry = buildSessionLookupEntries(sessions, contacts).find((entry) => entry.session.sessionId === direct.sessionId)
+      if (directEntry) {
+        candidates = [{ entry: directEntry, score: 1000 }, ...candidates]
+      }
+    }
+
+    const dedupedCandidates = Array.from(new Map(
+      candidates.map((candidate) => [candidate.entry.session.sessionId, candidate])
+    ).values()).slice(0, limit)
+
+    await reportProgress(reporter, {
+      stage: 'resolving_candidates',
+      message: dedupedCandidates.length > 0 ? `Found ${dedupedCandidates.length} session candidates.` : 'No session candidates found.',
+      candidates: dedupedCandidates.map((candidate) => candidate.entry.session),
+      candidateCount: dedupedCandidates.length
+    })
+
+    const recommended = dedupedCandidates[0] ? toResolvedCandidate(dedupedCandidates[0], args.data.query) : undefined
+    const exact = Boolean(recommended && recommended.score >= 1000)
+    const resolved = Boolean(recommended && (dedupedCandidates.length === 1 || recommended.confidence === 'high'))
+
+    const payload: McpResolveSessionPayload = {
+      query: args.data.query,
+      resolved,
+      exact,
+      recommended,
+      candidates: dedupedCandidates.map((candidate) => toResolvedCandidate(candidate, args.data.query)),
+      suggestedNextAction: resolved
+        ? 'get_session_context'
+        : dedupedCandidates.length > 0
+          ? 'search_messages'
+          : 'list_contacts',
+      message: resolved
+        ? `Resolved "${args.data.query}" to ${recommended?.displayName}.`
+        : dedupedCandidates.length > 0
+          ? `Found ${dedupedCandidates.length} plausible session candidates for "${args.data.query}".`
+          : `No session candidates found for "${args.data.query}".`
+    }
+
+    await reportPartial(reporter, 'resolve_session', payload)
+    return payload
+  }
+
+  async exportChat(rawArgs: ExportChatArgs, reporter?: McpStreamReporter): Promise<McpExportChatPayload> {
+    const args = exportChatArgsSchema.safeParse(rawArgs)
+    if (!args.success) {
+      throw new McpToolError('BAD_REQUEST', 'Invalid export_chat arguments.', args.error.message)
+    }
+
+    const data = args.data
+    const validateOnly = Boolean(data.validateOnly)
+    await reportProgress(reporter, {
+      stage: 'validating_export_request',
+      message: 'Validating export request.'
+    })
+
+    const [{ items: sessions, map: sessionMap }, { items: contacts, map: contactMap }] = await Promise.all([
+      getSessionCatalog(),
+      getContactCatalog()
+    ])
+
+    let resolvedSession: McpResolvedSessionCandidate | undefined
+    let candidates: McpResolvedSessionCandidate[] = []
+
+    if (data.sessionId || data.query) {
+      const query = data.sessionId || data.query || ''
+      const matchedCandidates = findSessionCandidates(query, sessions, contacts).slice(0, 5)
+      candidates = matchedCandidates.map((candidate) => toResolvedCandidate(candidate, query))
+
+      try {
+        const resolved = await resolveSessionRefStrictWithProgress(query, sessions, sessionMap, contacts, contactMap, reporter)
+        const matched = matchedCandidates.find((candidate) => candidate.entry.session.sessionId === resolved.sessionId)
+        resolvedSession = matched ? toResolvedCandidate(matched, query) : {
+          ...resolved,
+          score: 1000,
+          confidence: 'high',
+          aliases: [resolved.displayName, resolved.sessionId],
+          evidence: ['Resolved directly from the provided session clue.']
+        }
+      } catch (error) {
+        if (!(error instanceof McpToolError) || (error.code !== 'BAD_REQUEST' && error.code !== 'SESSION_NOT_FOUND')) {
+          throw error
+        }
+      }
+    }
+
+    const missingFields: McpExportMissingField[] = []
+    if (!resolvedSession) {
+      missingFields.push('session')
+    }
+    if (!data.dateRange || !data.dateRange.start || !data.dateRange.end) {
+      missingFields.push('dateRange')
+    } else if (data.dateRange.start > data.dateRange.end) {
+      throw new McpToolError('BAD_REQUEST', 'Invalid export date range.', 'dateRange.start must be earlier than or equal to dateRange.end.')
+    }
+    if (!data.format) {
+      missingFields.push('format')
+    } else if (!SUPPORTED_EXPORT_FORMATS.includes(data.format)) {
+      throw new McpToolError('BAD_REQUEST', 'Unsupported export format.', `Only ${SUPPORTED_EXPORT_FORMATS.join(', ')} are supported.`)
+    }
+    if (!isCompleteMediaOptions(data.mediaOptions)) {
+      missingFields.push('mediaOptions')
+    }
+
+    const requestedOutputDir = String(data.outputDir || '').trim()
+    const outputDir = requestedOutputDir || getDefaultExportPath() || ''
+    if (!outputDir || !isWritableDirectory(outputDir)) {
+      missingFields.push('outputDir')
+    }
+
+    const nextQuestion = getNextExportQuestion(missingFields)
+    const followUpQuestions = buildExportFollowUpQuestions(missingFields)
+    const payload: McpExportChatPayload = {
+      canExport: missingFields.length === 0,
+      validateOnly,
+      missingFields,
+      nextQuestion,
+      followUpQuestions,
+      resolvedSession,
+      candidates,
+      outputDir: outputDir || undefined,
+      format: data.format,
+      dateRange: data.dateRange,
+      mediaOptions: isCompleteMediaOptions(data.mediaOptions) ? data.mediaOptions : undefined,
+      message: missingFields.length === 0
+        ? validateOnly
+          ? 'Export request is complete and ready to run.'
+          : 'Export request validated and ready to execute.'
+        : 'Export request is incomplete and needs more information.'
+    }
+
+    await reportPartial(reporter, 'export_chat', payload)
+
+    if (missingFields.length > 0 || validateOnly) {
+      return payload
+    }
+
+    await reportProgress(reporter, {
+      stage: 'preparing_export',
+      message: `Preparing export for ${resolvedSession!.displayName}.`,
+      candidates: [{ sessionId: resolvedSession!.sessionId, displayName: resolvedSession!.displayName, kind: resolvedSession!.kind }],
+      candidateCount: 1
+    })
+
+    const exportOptions = toExportServiceOptions(
+      data.format!,
+      data.dateRange!,
+      data.mediaOptions as McpExportMediaOptions
+    )
+
+    const predictedOutputPath = buildPredictedExportPath(
+      outputDir,
+      resolvedSession!,
+      data.format!,
+      data.mediaOptions as McpExportMediaOptions
+    )
+
+    const result = await exportService.exportSessions(
+      [resolvedSession!.sessionId],
+      outputDir,
+      exportOptions,
+      (progress) => {
+        const stage = progress.phase === 'writing'
+          ? 'writing'
+          : progress.phase === 'exporting'
+            ? 'exporting'
+            : progress.phase === 'complete'
+              ? 'completed'
+              : 'preparing_export'
+
+        void reportProgress(reporter, {
+          stage,
+          message: progress.detail || progress.phase,
+          sessionsScanned: progress.current,
+          candidates: [{ sessionId: resolvedSession!.sessionId, displayName: resolvedSession!.displayName, kind: resolvedSession!.kind }],
+          candidateCount: 1
+        })
+      }
+    )
+
+    const completedPayload: McpExportChatPayload = {
+      ...payload,
+      canExport: true,
+      success: result.success,
+      successCount: result.successCount,
+      failCount: result.failCount,
+      error: result.error,
+      outputPath: predictedOutputPath,
+      message: result.success
+        ? `Exported chat for ${resolvedSession!.displayName}.`
+        : `Failed to export chat for ${resolvedSession!.displayName}.`
+    }
+
+    await reportPartial(reporter, 'export_chat', completedPayload)
+    return completedPayload
+  }
+
+  async listSessions(rawArgs: ListSessionsArgs, reporter?: McpStreamReporter): Promise<McpSessionsPayload> {
     const args = listSessionsArgsSchema.safeParse(rawArgs)
     if (!args.success) {
       throw new McpToolError('BAD_REQUEST', 'Invalid list_sessions arguments.', args.error.message)
@@ -642,15 +1388,32 @@ export class McpReadService {
     const offset = Math.max(0, args.data.offset ?? 0)
     const limit = Math.min(args.data.limit ?? 100, MAX_LIST_LIMIT)
     const unreadOnly = Boolean(args.data.unreadOnly)
+    await reportProgress(reporter, {
+      stage: 'searching_sessions',
+      message: query ? `Searching sessions for "${args.data.q}".` : 'Listing sessions.'
+    })
 
-    let sessions = (await getSessionCatalog()).items
+    const [{ items: sessionItems }, { map: contactMap }] = await Promise.all([
+      getSessionCatalog(),
+      getContactCatalog()
+    ])
+
+    let sessions = sessionItems
 
     if (query) {
       sessions = sessions.filter((session) => {
         return [
           session.sessionId,
           session.displayName,
-          session.lastMessagePreview
+          session.lastMessagePreview,
+          ...buildContactSearchKeys(contactMap.get(normalizeQuery(session.sessionId)) || {
+            contactId: session.sessionId,
+            sessionId: session.sessionId,
+            displayName: '',
+            remark: '',
+            nickname: '',
+            kind: session.kind === 'group' ? 'group' : session.kind === 'official' ? 'official' : 'friend'
+          })
         ].some((value) => value.toLowerCase().includes(query))
       })
     }
@@ -661,6 +1424,13 @@ export class McpReadService {
 
     const total = sessions.length
     const items = sessions.slice(offset, offset + limit)
+    await reportPartial(reporter, 'list_sessions', {
+      items,
+      total,
+      offset,
+      limit,
+      hasMore: offset + items.length < total
+    })
 
     return {
       items,
@@ -671,7 +1441,7 @@ export class McpReadService {
     }
   }
 
-  async listContacts(rawArgs: ListContactsArgs): Promise<McpContactsPayload> {
+  async listContacts(rawArgs: ListContactsArgs, reporter?: McpStreamReporter): Promise<McpContactsPayload> {
     const args = listContactsArgsSchema.safeParse(rawArgs)
     if (!args.success) {
       throw new McpToolError('BAD_REQUEST', 'Invalid list_contacts arguments.', args.error.message)
@@ -681,13 +1451,21 @@ export class McpReadService {
     const offset = Math.max(0, args.data.offset ?? 0)
     const limit = Math.min(args.data.limit ?? 100, MAX_LIST_LIMIT)
     const typeSet = args.data.types?.length ? new Set(args.data.types) : null
+    await reportProgress(reporter, {
+      stage: 'searching_contacts',
+      message: query ? `Searching contacts for "${args.data.q}".` : 'Listing contacts.'
+    })
 
     const result = await chatService.getContacts()
     if (!result.success) {
       mapChatError(result.error)
     }
 
-    let contacts = (result.contacts || []).map((contact) => toContactItem(contact as ContactWithLastContact))
+    const { map: sessionMap } = await getSessionCatalog()
+    let contacts = (result.contacts || []).map((contact) => {
+      const typedContact = contact as ContactWithLastContact
+      return toContactItem(typedContact, sessionMap.has(typedContact.username))
+    })
 
     if (typeSet) {
       contacts = contacts.filter((contact) => typeSet.has(contact.kind))
@@ -706,6 +1484,13 @@ export class McpReadService {
 
     const total = contacts.length
     const items = contacts.slice(offset, offset + limit)
+    await reportPartial(reporter, 'list_contacts', {
+      items,
+      total,
+      offset,
+      limit,
+      hasMore: offset + items.length < total
+    })
 
     return {
       items,
@@ -782,14 +1567,14 @@ export class McpReadService {
     }
   }
 
-  async getMessages(rawArgs: GetMessagesArgs, defaultIncludeMediaPaths: boolean): Promise<McpMessagesPayload> {
+  async getMessages(rawArgs: GetMessagesArgs, defaultIncludeMediaPaths: boolean, reporter?: McpStreamReporter): Promise<McpMessagesPayload> {
     const args = getMessagesArgsSchema.safeParse(rawArgs)
     if (!args.success) {
       throw new McpToolError('BAD_REQUEST', 'Invalid get_messages arguments.', args.error.message)
     }
 
     const {
-      sessionId,
+      sessionId: rawSessionId,
       keyword,
       includeRaw = false,
       order = 'asc'
@@ -801,6 +1586,18 @@ export class McpReadService {
     const keywordQuery = normalizeQuery(keyword)
     const startTimeMs = toTimestampMs(args.data.startTime)
     const endTimeMs = toTimestampMs(args.data.endTime)
+    const [{ items: sessions, map: sessionMap }, { items: contacts, map: contactMap }] = await Promise.all([
+      getSessionCatalog(),
+      getContactCatalog()
+    ])
+    const session = await resolveSessionRefStrictWithProgress(rawSessionId, sessions, sessionMap, contacts, contactMap, reporter)
+    const sessionId = session.sessionId
+    await reportProgress(reporter, {
+      stage: 'scanning_messages',
+      message: `Scanning messages in ${session.displayName}.`,
+      sessionsScanned: 1,
+      messagesScanned: 0
+    })
 
     const matched: Message[] = []
     let scanOffset = 0
@@ -828,6 +1625,12 @@ export class McpReadService {
 
       scanOffset += part.length
       scanned += part.length
+      await reportProgress(reporter, {
+        stage: 'scanning_messages',
+        message: `Scanned ${scanned} messages in ${session.displayName}.`,
+        sessionsScanned: 1,
+        messagesScanned: scanned
+      })
 
       if (!result.hasMore) {
         reachedEnd = true
@@ -839,6 +1642,12 @@ export class McpReadService {
 
     const page = matched.slice(offset, offset + limit)
     const items = await normalizeMessages(sessionId, page, { includeMediaPaths, includeRaw })
+    await reportPartial(reporter, 'get_messages', {
+      items,
+      offset,
+      limit,
+      hasMore: reachedEnd ? matched.length > offset + items.length : true
+    })
 
     return {
       items,
@@ -848,13 +1657,16 @@ export class McpReadService {
     }
   }
 
-  async searchMessages(rawArgs: SearchMessagesArgs, defaultIncludeMediaPaths: boolean): Promise<McpSearchMessagesPayload> {
+  async searchMessages(rawArgs: SearchMessagesArgs, defaultIncludeMediaPaths: boolean, reporter?: McpStreamReporter): Promise<McpSearchMessagesPayload> {
     const args = searchMessagesArgsSchema.safeParse(rawArgs)
     if (!args.success) {
       throw new McpToolError('BAD_REQUEST', 'Invalid search_messages arguments.', args.error.message)
     }
 
-    const { items: sessions, map: sessionMap } = await getSessionCatalog()
+    const [{ items: sessions, map: sessionMap }, { items: contacts, map: contactMap }] = await Promise.all([
+      getSessionCatalog(),
+      getContactCatalog()
+    ])
     const includeRaw = args.data.includeRaw ?? false
     const includeMediaPaths = args.data.includeMediaPaths ?? defaultIncludeMediaPaths
     const limit = Math.min(args.data.limit ?? 20, MAX_SEARCH_LIMIT)
@@ -869,8 +1681,8 @@ export class McpReadService {
     }
 
     const targetSessions = sessionIdCandidates.length > 0
-      ? sessionIdCandidates.map((sessionId) => resolveSessionRef(sessionId, sessionMap))
-      : sessions.slice(0, MAX_SEARCH_SESSIONS).map((session) => ({
+      ? await Promise.all(sessionIdCandidates.map((sessionId) => resolveSessionRefStrictWithProgress(sessionId, sessions, sessionMap, contacts, contactMap, reporter)))
+      : sessions.map((session) => ({
           sessionId: session.sessionId,
           displayName: session.displayName,
           kind: session.kind
@@ -887,6 +1699,12 @@ export class McpReadService {
     let truncated = false
     let bestScore = Number.NEGATIVE_INFINITY
     let hitTargetReached = false
+    await reportProgress(reporter, {
+      stage: 'scanning_messages',
+      message: `Searching ${targetSessions.length} sessions for "${args.data.query}".`,
+      sessionsScanned: 0,
+      messagesScanned: 0
+    })
 
     for (const session of targetSessions) {
       sessionsScanned += 1
@@ -920,6 +1738,12 @@ export class McpReadService {
         sessionOffset += part.length
         sessionScanned += part.length
         messagesScanned += part.length
+        await reportProgress(reporter, {
+          stage: 'scanning_messages',
+          message: `Scanned ${messagesScanned} messages across ${sessionsScanned} sessions.`,
+          sessionsScanned,
+          messagesScanned
+        })
 
         for (const message of part) {
           if (!messageMatchesFilters(message, {
@@ -948,6 +1772,12 @@ export class McpReadService {
 
         if (rawHits.length >= limit * 3) {
           hitTargetReached = true
+          await reportProgress(reporter, {
+            stage: 'streaming_hits',
+            message: `Collected ${rawHits.length} candidate hits.`,
+            sessionsScanned,
+            messagesScanned
+          })
           if (roundBestScore === Number.NEGATIVE_INFINITY || roundBestScore <= bestScoreBeforeBatch) {
             truncated = true
             break
@@ -979,37 +1809,63 @@ export class McpReadService {
       matchedField: hit.matchedField,
       score: hit.score
     })))
+    const sessionSummaries = buildSearchSessionSummaries(hits)
+    await reportPartial(reporter, 'search_messages', {
+      hits,
+      limit,
+      sessionsScanned,
+      messagesScanned,
+      truncated,
+      sessionSummaries
+    })
 
     return {
       hits,
       limit,
       sessionsScanned,
       messagesScanned,
-      truncated
+      truncated,
+      sessionSummaries
     }
   }
 
-  async getSessionContext(rawArgs: GetSessionContextArgs, defaultIncludeMediaPaths: boolean): Promise<McpSessionContextPayload> {
+  async getSessionContext(rawArgs: GetSessionContextArgs, defaultIncludeMediaPaths: boolean, reporter?: McpStreamReporter): Promise<McpSessionContextPayload> {
     const args = getSessionContextArgsSchema.safeParse(rawArgs)
     if (!args.success) {
       throw new McpToolError('BAD_REQUEST', 'Invalid get_session_context arguments.', args.error.message)
     }
 
-    const { map: sessionMap } = await getSessionCatalog()
-    const session = resolveSessionRef(args.data.sessionId, sessionMap)
+    const [{ items: sessions, map: sessionMap }, { items: contacts, map: contactMap }] = await Promise.all([
+      getSessionCatalog(),
+      getContactCatalog()
+    ])
+    const session = await resolveSessionRefStrictWithProgress(args.data.sessionId, sessions, sessionMap, contacts, contactMap, reporter)
+    const resolvedSessionId = session.sessionId
     const includeRaw = args.data.includeRaw ?? false
     const includeMediaPaths = args.data.includeMediaPaths ?? defaultIncludeMediaPaths
 
     if (args.data.mode === 'latest') {
       const latestLimit = Math.min(args.data.beforeLimit ?? 30, MAX_CONTEXT_LIMIT)
-      const result = await chatService.getMessages(args.data.sessionId, 0, latestLimit)
+      await reportProgress(reporter, {
+        stage: 'scanning_messages',
+        message: `Loading latest context for ${session.displayName}.`,
+        sessionsScanned: 1
+      })
+      const result = await chatService.getMessages(resolvedSessionId, 0, latestLimit)
       if (!result.success) {
         mapChatError(result.error)
       }
 
-      const messages = await normalizeMessages(args.data.sessionId, result.messages || [], {
+      const messages = await normalizeMessages(resolvedSessionId, result.messages || [], {
         includeMediaPaths,
         includeRaw
+      })
+      await reportPartial(reporter, 'get_session_context', {
+        session,
+        mode: 'latest',
+        items: messages,
+        hasMoreBefore: Boolean(result.hasMore),
+        hasMoreAfter: false
       })
 
       return {
@@ -1024,24 +1880,29 @@ export class McpReadService {
     const anchorCursor = args.data.anchorCursor!
     const beforeLimit = Math.min(args.data.beforeLimit ?? 20, MAX_CONTEXT_LIMIT)
     const afterLimit = Math.min(args.data.afterLimit ?? 20, MAX_CONTEXT_LIMIT)
+    await reportProgress(reporter, {
+      stage: 'scanning_messages',
+      message: `Loading context around anchor in ${session.displayName}.`,
+      sessionsScanned: 1
+    })
 
     const [beforeResult, anchorResult, afterResult] = await Promise.all([
       chatService.getMessagesBefore(
-        args.data.sessionId,
+        resolvedSessionId,
         anchorCursor.sortSeq,
         beforeLimit,
         anchorCursor.createTime,
         anchorCursor.localId
       ),
       chatService.getMessagesAfter(
-        args.data.sessionId,
+        resolvedSessionId,
         anchorCursor.sortSeq,
         1,
         anchorCursor.createTime,
         anchorCursor.localId - 1
       ),
       chatService.getMessagesAfter(
-        args.data.sessionId,
+        resolvedSessionId,
         anchorCursor.sortSeq,
         afterLimit,
         anchorCursor.createTime,
@@ -1059,19 +1920,27 @@ export class McpReadService {
     }
 
     const [beforeItems, anchorItem, afterItems] = await Promise.all([
-      normalizeMessages(args.data.sessionId, beforeResult.messages || [], {
+      normalizeMessages(resolvedSessionId, beforeResult.messages || [], {
         includeMediaPaths,
         includeRaw
       }),
-      normalizeMessage(args.data.sessionId, anchorMessage, {
+      normalizeMessage(resolvedSessionId, anchorMessage, {
         includeMediaPaths,
         includeRaw
       }),
-      normalizeMessages(args.data.sessionId, afterResult.messages || [], {
+      normalizeMessages(resolvedSessionId, afterResult.messages || [], {
         includeMediaPaths,
         includeRaw
       })
     ])
+    await reportPartial(reporter, 'get_session_context', {
+      session,
+      mode: 'around',
+      anchor: anchorItem,
+      items: [...beforeItems, anchorItem, ...afterItems],
+      hasMoreBefore: Boolean(beforeResult.hasMore),
+      hasMoreAfter: Boolean(afterResult.hasMore)
+    })
 
     return {
       session,

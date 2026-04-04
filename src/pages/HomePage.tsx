@@ -27,6 +27,8 @@ function HomePage() {
   // 新版本弹窗状态
   const [showWhatsNew, setShowWhatsNew] = useState(false)
   const [currentVersion, setCurrentVersion] = useState('')
+  const [releaseBody, setReleaseBody] = useState('')
+  const [releaseNotes, setReleaseNotes] = useState('')
 
   useEffect(() => {
     checkNewVersion()
@@ -61,20 +63,32 @@ function HomePage() {
 
   const checkNewVersion = async () => {
     try {
-      // 获取当前应用版本
       const version = await window.electronAPI.app.getVersion()
       setCurrentVersion(version)
 
-      // 获取上次查看的版本
-      const lastSeenVersion = localStorage.getItem('lastSeenVersion')
+      const [
+        announcementVersion,
+        announcementBody,
+        announcementNotes,
+        seenVersion
+      ] = await Promise.all([
+        window.electronAPI.config.get('releaseAnnouncementVersion'),
+        window.electronAPI.config.get('releaseAnnouncementBody'),
+        window.electronAPI.config.get('releaseAnnouncementNotes'),
+        window.electronAPI.config.get('releaseAnnouncementSeenVersion')
+      ])
 
-      // 简单的版本比较逻辑：如果版本不同且未记录，或者是新安装，则显示
-      // 为了防止每次开发时版本号不变也弹，这里只在版本确实不同时弹
-      // 注意：这里假设版本号格式为 x.y.z
+      const normalizedAnnouncementVersion = String(announcementVersion || '').trim()
+      const normalizedBody = String(announcementBody || '').trim()
+      const normalizedNotes = String(announcementNotes || '').trim()
+      const normalizedSeenVersion = String(seenVersion || '').trim()
 
-      if (version !== lastSeenVersion) {
-        // 如果是全新安装（没有 lastSeenVersion），也显示
-        // 实际上这通常用于引导新用户
+      if (normalizedAnnouncementVersion === version) {
+        setReleaseBody(normalizedBody)
+        setReleaseNotes(normalizedNotes)
+      }
+
+      if (normalizedAnnouncementVersion === version && normalizedSeenVersion !== version) {
         setShowWhatsNew(true)
       }
     } catch (e) {
@@ -85,7 +99,7 @@ function HomePage() {
   const handleCloseWhatsNew = () => {
     setShowWhatsNew(false)
     if (currentVersion) {
-      localStorage.setItem('lastSeenVersion', currentVersion)
+      window.electronAPI.config.set('releaseAnnouncementSeenVersion', currentVersion)
     }
   }
 
@@ -119,6 +133,8 @@ function HomePage() {
       {showWhatsNew && (
         <WhatsNewModal
           version={currentVersion}
+          releaseBody={releaseBody}
+          releaseNotes={releaseNotes}
           onClose={handleCloseWhatsNew}
         />
       )}

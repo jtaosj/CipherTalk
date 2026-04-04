@@ -28,6 +28,7 @@ dist-electron
 # Build output
 out
 release
+.tmp/release-announcement.json
 
 # Database
 *.db
@@ -53,3 +54,4 @@ native-dlls
 resources/whisper
 xkey
 skills
+.claude/

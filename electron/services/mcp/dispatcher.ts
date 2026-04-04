@@ -1,10 +1,19 @@
 import { getMcpConfigSnapshot, getMcpHealthPayload, getMcpStatusPayload } from './runtime'
 import { McpReadService } from './readService'
-import type { McpToolName } from './types'
+import type { McpStreamPartialPayloadMap, McpStreamProgressPayload, McpToolName } from './types'
 
 const readService = new McpReadService()
 
-export async function executeMcpTool(toolName: McpToolName, args: Record<string, unknown> = {}) {
+type ExecuteStreamReporter = {
+  progress?: (payload: McpStreamProgressPayload) => void | Promise<void>
+  partial?: <K extends keyof McpStreamPartialPayloadMap>(toolName: K, payload: McpStreamPartialPayloadMap[K]) => void | Promise<void>
+}
+
+export async function executeMcpTool(
+  toolName: McpToolName,
+  args: Record<string, unknown> = {},
+  reporter?: ExecuteStreamReporter
+) {
   switch (toolName) {
     case 'health_check': {
       const payload = getMcpHealthPayload()
@@ -13,6 +22,28 @@ export async function executeMcpTool(toolName: McpToolName, args: Record<string,
     case 'get_status': {
       const payload = getMcpStatusPayload()
       return { summary: 'CipherTalk MCP status loaded.', payload }
+    }
+    case 'resolve_session': {
+      const payload = await readService.resolveSession(args as any, reporter)
+      return {
+        summary: payload.recommended
+          ? `Resolved ${payload.query} to ${payload.recommended.displayName}.`
+          : `Found ${payload.candidates.length} candidates for ${payload.query}.`,
+        payload
+      }
+    }
+    case 'export_chat': {
+      const payload = await readService.exportChat(args as any, reporter)
+      return {
+        summary: payload.success
+          ? `Exported chat for ${payload.resolvedSession?.displayName || payload.resolvedSession?.sessionId || 'target session'}.`
+          : payload.success === false
+            ? `Failed to export chat for ${payload.resolvedSession?.displayName || payload.resolvedSession?.sessionId || 'target session'}.`
+            : payload.canExport
+            ? `Prepared export for ${payload.resolvedSession?.displayName || payload.resolvedSession?.sessionId || 'target session'}.`
+            : 'Export request needs more information.',
+        payload
+      }
     }
     case 'get_global_statistics': {
       const payload = await readService.getGlobalStatistics(args as any)
@@ -27,26 +58,26 @@ export async function executeMcpTool(toolName: McpToolName, args: Record<string,
       return { summary: 'Loaded activity distribution.', payload }
     }
     case 'list_sessions': {
-      const payload = await readService.listSessions(args as any)
+      const payload = await readService.listSessions(args as any, reporter)
       return { summary: `Loaded ${payload.items.length} sessions.`, payload }
     }
     case 'get_messages': {
       const defaults = getMcpConfigSnapshot()
-      const payload = await readService.getMessages(args as any, defaults.mcpExposeMediaPaths)
+      const payload = await readService.getMessages(args as any, defaults.mcpExposeMediaPaths, reporter)
       return { summary: `Loaded ${payload.items.length} messages.`, payload }
     }
     case 'list_contacts': {
-      const payload = await readService.listContacts(args as any)
+      const payload = await readService.listContacts(args as any, reporter)
       return { summary: `Loaded ${payload.items.length} contacts.`, payload }
     }
     case 'search_messages': {
       const defaults = getMcpConfigSnapshot()
-      const payload = await readService.searchMessages(args as any, defaults.mcpExposeMediaPaths)
+      const payload = await readService.searchMessages(args as any, defaults.mcpExposeMediaPaths, reporter)
       return { summary: `Loaded ${payload.hits.length} message hits.`, payload }
     }
     case 'get_session_context': {
       const defaults = getMcpConfigSnapshot()
-      const payload = await readService.getSessionContext(args as any, defaults.mcpExposeMediaPaths)
+      const payload = await readService.getSessionContext(args as any, defaults.mcpExposeMediaPaths, reporter)
       return { summary: `Loaded ${payload.items.length} context messages.`, payload }
     }
     default:

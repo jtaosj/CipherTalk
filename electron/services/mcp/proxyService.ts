@@ -2,7 +2,7 @@ import * as http from 'http'
 import type { Socket } from 'net'
 import { McpToolError } from './result'
 import { executeMcpTool } from './dispatcher'
-import { MCP_TOOL_NAMES, type McpToolName } from './types'
+import { MCP_TOOL_NAMES, type McpStreamEvent, type McpStreamPartialPayloadMap, type McpStreamProgressPayload, type McpToolName } from './types'
 
 type ProxySettings = {
   host: '127.0.0.1'
@@ -145,6 +145,11 @@ class McpProxyService {
     res.end(JSON.stringify(payload))
   }
 
+  private sendSse(res: http.ServerResponse, event: McpStreamEvent): void {
+    res.write(`event: ${event.event}\n`)
+    res.write(`data: ${JSON.stringify(event.data)}\n\n`)
+  }
+
   private isAuthorized(req: http.IncomingMessage): boolean {
     if (!this.settings.token) return true
 
@@ -194,7 +199,7 @@ class McpProxyService {
       return
     }
 
-    if (method !== 'POST' || !pathname.startsWith('/tool/')) {
+    if ((method !== 'POST' && method !== 'GET') || !pathname.startsWith('/tool/')) {
       this.sendJson(res, 404, {
         success: false,
         error: {
@@ -206,7 +211,9 @@ class McpProxyService {
       return
     }
 
-    const toolName = pathname.slice('/tool/'.length) as McpToolName
+    const isStreamRequest = pathname.endsWith('/stream')
+    const toolPath = isStreamRequest ? pathname.slice(0, -'/stream'.length) : pathname
+    const toolName = toolPath.slice('/tool/'.length) as McpToolName
     if (!MCP_TOOL_NAMES.includes(toolName)) {
       this.sendJson(res, 404, {
         success: false,
@@ -220,8 +227,12 @@ class McpProxyService {
     }
 
     try {
-      const body = await this.readJson(req)
+      const body = method === 'POST' ? await this.readJson(req) : {}
       const args = body.args && typeof body.args === 'object' ? body.args as Record<string, unknown> : {}
+      if (isStreamRequest) {
+        await this.handleStreamRequest(toolName, args, requestId, res)
+        return
+      }
       const startedAt = Date.now()
       const result = await executeMcpTool(toolName, args)
       this.logger?.info('McpProxy', '内部 MCP 代理查询成功', {
@@ -252,6 +263,95 @@ class McpProxyService {
         error: payload,
         meta: { requestId, ts: Date.now() }
       })
+    }
+  }
+
+  private async handleStreamRequest(
+    toolName: McpToolName,
+    args: Record<string, unknown>,
+    requestId: string,
+    res: http.ServerResponse
+  ): Promise<void> {
+    const startedAt = Date.now()
+    let chunkIndex = 0
+
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream; charset=utf-8',
+      'Cache-Control': 'no-store',
+      Connection: 'keep-alive'
+    })
+
+    this.sendSse(res, {
+      event: 'meta',
+      data: {
+        toolName,
+        requestId,
+        startedAt
+      }
+    })
+
+    try {
+      const result = await executeMcpTool(toolName, args, {
+        progress: async (payload: McpStreamProgressPayload) => {
+          this.sendSse(res, {
+            event: 'progress',
+            data: payload
+          })
+        },
+        partial: async <K extends keyof McpStreamPartialPayloadMap>(partialToolName: K, payload: McpStreamPartialPayloadMap[K]) => {
+          chunkIndex += 1
+          this.sendSse(res, {
+            event: 'partial',
+            data: {
+              toolName: partialToolName,
+              chunkIndex,
+              payload
+            }
+          })
+        }
+      })
+
+      this.sendSse(res, {
+        event: 'progress',
+        data: {
+          stage: 'completed',
+          message: `Completed ${toolName}.`
+        }
+      })
+      this.sendSse(res, {
+        event: 'complete',
+        data: {
+          toolName,
+          summary: result.summary,
+          payload: result.payload,
+          completedAt: Date.now()
+        }
+      })
+      res.end()
+    } catch (error) {
+      const payload = error instanceof McpToolError
+        ? error.toShape()
+        : {
+            code: 'INTERNAL_ERROR' as const,
+            message: String(error)
+          }
+
+      this.sendSse(res, {
+        event: 'progress',
+        data: {
+          stage: 'failed',
+          message: `Failed ${toolName}.`
+        }
+      })
+      this.sendSse(res, {
+        event: 'error',
+        data: {
+          ...payload,
+          toolName,
+          failedAt: Date.now()
+        }
+      })
+      res.end()
     }
   }
 }

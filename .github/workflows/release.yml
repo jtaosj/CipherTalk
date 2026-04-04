@@ -82,6 +82,16 @@ jobs:
     runs-on: windows-latest
     environment: 软件发布
     needs: prepare-meta
+    env:
+      GH_TOKEN: ${{ secrets.GH_TOKEN }}
+      AI_API_KEY: ${{ secrets.AI_API_KEY }}
+      AI_API_URL: ${{ vars.AI_API_URL }}
+      AI_MODEL: ${{ vars.AI_MODEL }}
+      FORCE_UPDATE_MIN_VERSION: ${{ vars.FORCE_UPDATE_MIN_VERSION }}
+      FORCE_UPDATE_BLOCKED_VERSIONS: ${{ vars.FORCE_UPDATE_BLOCKED_VERSIONS }}
+      FORCE_UPDATE_TITLE: ${{ vars.FORCE_UPDATE_TITLE }}
+      FORCE_UPDATE_MESSAGE: ${{ vars.FORCE_UPDATE_MESSAGE }}
+      FORCE_UPDATE_RELEASE_NOTES: ${{ vars.FORCE_UPDATE_RELEASE_NOTES }}
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -98,6 +108,15 @@ jobs:
       - name: Rebuild native modules
         run: npx electron-rebuild
 
+      - name: Download release metadata
+        uses: actions/download-artifact@v4
+        with:
+          name: release-meta
+          path: release
+
+      - name: Generate embedded release body
+        run: npm run build:release-body
+
       - name: Build app
         run: npm run build:ci
 
@@ -106,7 +125,6 @@ jobs:
         run: |
           $version = "${{ needs.prepare-meta.outputs.version }}"
           $installer = "release/CipherTalk-$version-Setup.exe"
-          $blockmaps = Get-ChildItem "release" -Filter "*.blockmap" -ErrorAction SilentlyContinue
           if (-not (Test-Path $installer)) {
             Write-Error "Installer not found: $installer"
             exit 1
@@ -115,8 +133,29 @@ jobs:
             Write-Error "latest.yml not found"
             exit 1
           }
-          if (-not $blockmaps -or $blockmaps.Count -lt 1) {
-            Write-Error "blockmap not found"
+          $sizeLines = @(Select-String -Path "release/latest.yml" -Pattern '^\s+size:\s+\d+\s*$')
+          if ($sizeLines.Count -ne 1) {
+            Write-Error "latest.yml should contain exactly one size entry, found $($sizeLines.Count)"
+            exit 1
+          }
+
+          $latestYml = Get-Content "release/latest.yml" -Raw
+          $shaMatch = [regex]::Match($latestYml, '(?m)^sha512:\s*(.+)$')
+          if (-not $shaMatch.Success) {
+            Write-Error "sha512 not found in latest.yml"
+            exit 1
+          }
+
+          $hashHex = (Get-FileHash -Algorithm SHA512 $installer).Hash
+          $hashBytes = [byte[]]::new($hashHex.Length / 2)
+          for ($i = 0; $i -lt $hashHex.Length; $i += 2) {
+            $hashBytes[$i / 2] = [Convert]::ToByte($hashHex.Substring($i, 2), 16)
+          }
+          $actualSha512 = [Convert]::ToBase64String($hashBytes)
+          $expectedSha512 = $shaMatch.Groups[1].Value.Trim()
+
+          if ($actualSha512 -ne $expectedSha512) {
+            Write-Error "latest.yml sha512 does not match installer"
             exit 1
           }
 
@@ -127,7 +166,6 @@ jobs:
           path: |
             release/CipherTalk-${{ needs.prepare-meta.outputs.version }}-Setup.exe
             release/latest.yml
-            release/*.blockmap
           if-no-files-found: error
 
   generate-release-body:
@@ -214,13 +252,17 @@ jobs:
         run: |
           $version = "${{ needs.prepare-meta.outputs.version }}"
           $installer = "release/CipherTalk-$version-Setup.exe"
-          $blockmaps = Get-ChildItem "release" -Filter "*.blockmap" -ErrorAction SilentlyContinue
           if (-not (Test-Path $installer)) {
             Write-Error "Installer not found: $installer"
             exit 1
           }
           if (-not (Test-Path "release/latest.yml")) {
             Write-Error "latest.yml not found"
+            exit 1
+          }
+          $sizeLines = @(Select-String -Path "release/latest.yml" -Pattern '^\s+size:\s+\d+\s*$')
+          if ($sizeLines.Count -ne 1) {
+            Write-Error "latest.yml should contain exactly one size entry, found $($sizeLines.Count)"
             exit 1
           }
           if (-not (Test-Path "release/force-update.json")) {
@@ -231,8 +273,24 @@ jobs:
             Write-Error "release-body.md not found"
             exit 1
           }
-          if (-not $blockmaps -or $blockmaps.Count -lt 1) {
-            Write-Error "blockmap not found"
+
+          $latestYml = Get-Content "release/latest.yml" -Raw
+          $shaMatch = [regex]::Match($latestYml, '(?m)^sha512:\s*(.+)$')
+          if (-not $shaMatch.Success) {
+            Write-Error "sha512 not found in latest.yml"
+            exit 1
+          }
+
+          $hashHex = (Get-FileHash -Algorithm SHA512 $installer).Hash
+          $hashBytes = [byte[]]::new($hashHex.Length / 2)
+          for ($i = 0; $i -lt $hashHex.Length; $i += 2) {
+            $hashBytes[$i / 2] = [Convert]::ToByte($hashHex.Substring($i, 2), 16)
+          }
+          $actualSha512 = [Convert]::ToBase64String($hashBytes)
+          $expectedSha512 = $shaMatch.Groups[1].Value.Trim()
+
+          if ($actualSha512 -ne $expectedSha512) {
+            Write-Error "latest.yml sha512 does not match installer"
             exit 1
           }
 
@@ -240,13 +298,14 @@ jobs:
         uses: softprops/action-gh-release@v2.5.0
         with:
           tag_name: ${{ needs.prepare-meta.outputs.tag }}
+          name: CipherTalk v${{ needs.prepare-meta.outputs.version }}
           body_path: release/release-body.md
           fail_on_unmatched_files: false
+          overwrite_files: false
           files: |
             release/CipherTalk-${{ needs.prepare-meta.outputs.version }}-Setup.exe
             release/latest.yml
             release/force-update.json
-            release/*.blockmap
 
   mirror-r2:
     runs-on: windows-latest
@@ -295,12 +354,6 @@ jobs:
           $bucket = "s3://$($env:R2_BUCKET_NAME)"
           $version = "${{ needs.prepare-meta.outputs.version }}"
           $currentInstaller = "CipherTalk-$version-Setup.exe"
-          $currentBlockmaps = Get-ChildItem "release" -Filter "*.blockmap" -ErrorAction SilentlyContinue
-
-          if (-not $currentBlockmaps -or $currentBlockmaps.Count -lt 1) {
-            Write-Error "blockmap not found"
-            exit 1
-          }
 
           $existingInstallers = aws s3 ls $bucket --endpoint-url $endpoint | ForEach-Object {
             $line = $_.ToString().Trim()
@@ -323,17 +376,12 @@ jobs:
           }
 
           foreach ($blockmap in $existingBlockmaps) {
-            if ($currentBlockmaps.Name -notcontains $blockmap) {
-              aws s3 rm "$bucket/$blockmap" --endpoint-url $endpoint
-            }
+            aws s3 rm "$bucket/$blockmap" --endpoint-url $endpoint
           }
 
           aws s3 cp "release/$currentInstaller" "$bucket/$currentInstaller" --endpoint-url $endpoint
           aws s3 cp "release/latest.yml" "$bucket/latest.yml" --endpoint-url $endpoint
           aws s3 cp "release/force-update.json" "$bucket/force-update.json" --endpoint-url $endpoint
-          foreach ($blockmap in $currentBlockmaps) {
-            aws s3 cp $blockmap.FullName "$bucket/$($blockmap.Name)" --endpoint-url $endpoint
-          }
 
   notify-telegram-success:
     runs-on: windows-latest

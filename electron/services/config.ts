@@ -30,6 +30,10 @@ interface ConfigSchema {
   themeMode: string
   appIcon: string
   language: string
+  releaseAnnouncementVersion: string
+  releaseAnnouncementBody: string
+  releaseAnnouncementNotes: string
+  releaseAnnouncementSeenVersion: string
 
   // 协议相关
   agreementVersion: number
@@ -99,6 +103,10 @@ const defaults: ConfigSchema = {
   themeMode: 'light',
   appIcon: 'default',
   language: 'zh-CN',
+  releaseAnnouncementVersion: '',
+  releaseAnnouncementBody: '',
+  releaseAnnouncementNotes: '',
+  releaseAnnouncementSeenVersion: '',
   sttLanguages: ['zh'],
   sttModelType: 'int8',
   sttMode: 'cpu',  // 默认使用 CPU 模式

@@ -7,9 +7,12 @@ import type {
   McpActivityDistributionPayload,
   McpContactRankingsPayload,
   McpContactsPayload,
+  McpExportChatPayload,
   McpGlobalStatisticsPayload,
   McpHealthPayload,
   McpMessagesPayload,
+  McpResolveSessionPayload,
+  McpStreamEvent,
   McpSearchMessagesPayload,
   McpSessionContextPayload,
   McpSessionsPayload,
@@ -36,8 +39,27 @@ type ProxyEnvelopeError = {
   }
 }
 
+type StreamToolOptions = {
+  signal?: AbortSignal
+  onEvent?: (event: McpStreamEvent) => void
+}
+
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+function findSseDelimiterIndex(buffer: string): { index: number; length: number } | null {
+  const crlfIndex = buffer.indexOf('\r\n\r\n')
+  if (crlfIndex >= 0) {
+    return { index: crlfIndex, length: 4 }
+  }
+
+  const lfIndex = buffer.indexOf('\n\n')
+  if (lfIndex >= 0) {
+    return { index: lfIndex, length: 2 }
+  }
+
+  return null
 }
 
 function getSpawnEnv(): NodeJS.ProcessEnv {
@@ -153,6 +175,82 @@ export class McpReadService {
     return payload.data
   }
 
+  async streamTool(
+    toolName: McpToolName,
+    args: Record<string, unknown> = {},
+    options: StreamToolOptions = {}
+  ): Promise<unknown> {
+    const proxyConfig = await this.ensureProxyReady(toolName !== 'health_check')
+    const response = await fetch(`${proxyConfig.url}/tool/${toolName}/stream`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'text/event-stream',
+        ...(proxyConfig.token ? { Authorization: `Bearer ${proxyConfig.token}` } : {})
+      },
+      body: JSON.stringify({ args }),
+      signal: options.signal
+    })
+
+    if (!response.ok || !response.body) {
+      return this.callProxy(toolName, args)
+    }
+
+    const decoder = new TextDecoder()
+    const reader = response.body.getReader()
+    let buffer = ''
+    let finalPayload: unknown
+
+    const flushEvent = async (rawBlock: string) => {
+      const lines = rawBlock.split(/\r?\n/)
+      let eventName = 'message'
+      const dataLines: string[] = []
+
+      for (const line of lines) {
+        if (line.startsWith('event:')) {
+          eventName = line.slice('event:'.length).trim()
+        } else if (line.startsWith('data:')) {
+          dataLines.push(line.slice('data:'.length).trim())
+        }
+      }
+
+      if (dataLines.length === 0) return
+      const parsed = JSON.parse(dataLines.join('\n')) as McpStreamEvent['data']
+      const event = { event: eventName, data: parsed } as McpStreamEvent
+      options.onEvent?.(event)
+
+      if (event.event === 'error') {
+        throw new McpToolError(event.data.code, event.data.message, event.data.hint)
+      }
+
+      if (event.event === 'complete') {
+        finalPayload = event.data.payload
+      }
+    }
+
+    while (true) {
+      const { value, done } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+
+      let delimiter = findSseDelimiterIndex(buffer)
+      while (delimiter) {
+        const block = buffer.slice(0, delimiter.index).trim()
+        buffer = buffer.slice(delimiter.index + delimiter.length)
+        if (block) {
+          await flushEvent(block)
+        }
+        delimiter = findSseDelimiterIndex(buffer)
+      }
+    }
+
+    if (buffer.trim()) {
+      await flushEvent(buffer.trim())
+    }
+
+    return finalPayload
+  }
+
   async healthCheck(): Promise<McpHealthPayload> {
     const proxyConfig = await this.ensureProxyReady(false)
     const response = await fetch(`${proxyConfig.url}/status`, {
@@ -167,6 +265,14 @@ export class McpReadService {
 
   async getStatus(): Promise<McpStatusPayload> {
     return this.callProxy<McpStatusPayload>('get_status')
+  }
+
+  async resolveSession(rawArgs: Record<string, unknown>): Promise<McpResolveSessionPayload> {
+    return this.callProxy<McpResolveSessionPayload>('resolve_session', rawArgs)
+  }
+
+  async exportChat(rawArgs: Record<string, unknown>): Promise<McpExportChatPayload> {
+    return this.callProxy<McpExportChatPayload>('export_chat', rawArgs)
   }
 
   async listSessions(rawArgs: Record<string, unknown>): Promise<McpSessionsPayload> {
@@ -208,5 +314,16 @@ export class McpReadService {
       ...rawArgs,
       includeMediaPaths: rawArgs.includeMediaPaths ?? defaultIncludeMediaPaths
     })
+  }
+
+  async streamSearchMessages(
+    rawArgs: Record<string, unknown>,
+    defaultIncludeMediaPaths: boolean,
+    options: StreamToolOptions = {}
+  ): Promise<McpSearchMessagesPayload> {
+    return this.streamTool('search_messages', {
+      ...rawArgs,
+      includeMediaPaths: rawArgs.includeMediaPaths ?? defaultIncludeMediaPaths
+    }, options) as Promise<McpSearchMessagesPayload>
   }
 }

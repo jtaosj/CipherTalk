@@ -58,7 +58,7 @@ GH_TOKEN=ghp_xxxx
 其中：
 
 1. `prepare-meta` 生成 `force-update.json` 和 `release-context.json`
-2. `build-windows` 负责构建安装包、`latest.yml` 和 `*.blockmap`
+2. `build-windows` 负责构建安装包和 `latest.yml`
 3. `generate-release-body` 负责 AI / 模板版发布说明
 4. `publish-github-release` 汇总产物并创建 GitHub Release
 5. `mirror-r2` 与 `notify-telegram-success` 在发布成功后并行执行
@@ -68,14 +68,12 @@ GitHub Release 上传内容：
 - 安装包
 - `latest.yml`
 - `force-update.json`
-- `*.blockmap`（必需）
 
 Cloudflare R2 同步内容：
 
 - 安装包
 - `latest.yml`
 - `force-update.json`
-- `*.blockmap`
 
 Telegram 通知：
 
@@ -86,27 +84,24 @@ GitHub Release 资产包括：
    - 安装包
    - `latest.yml`
    - `force-update.json`
-   - `*.blockmap`
 10. 向 Telegram 频道/群发送发布通知（AI 摘要 + 强制更新提醒）
 
-## Windows 差分更新
+## Windows 全量更新
 
-当前 Windows 自动更新已启用差分下载。
+当前 Windows 自动更新统一使用全量安装包下载。
 
 依赖产物为：
 
 - `CipherTalk-x.y.z-Setup.exe`
 - `latest.yml`
-- 至少一个 `*.blockmap`
 
-工作流会在构建、GitHub Release 发布、R2 镜像同步阶段强校验 `*.blockmap` 是否存在；缺失时直接失败，避免退回全量更新而未被发现。
+工作流会在构建与发布阶段校验安装包和 `latest.yml` 的哈希是否一致，避免元数据与真实安装包不匹配。
 
 说明：
 
 - 当前仍是未签名发布
-- 未签名状态下差分更新可以工作
 - 公开分发时稳定性仍可能受 SmartScreen / 杀软 / 系统策略影响
-- 若差分下载失败，`electron-updater` 应回退到完整包更新，不修改现有 UI 交互
+- 当前已禁用差分更新，客户端始终下载完整安装包
 
 ## 版本要求
 
