@@ -254,9 +254,15 @@ function ChatPage(_props: ChatPageProps) {
   const isUserOperatingRef = useRef<boolean>(false) // 标记用户是否正在操作
   const [currentOffset, setCurrentOffset] = useState(0)
   const [isDateJumpMode, setIsDateJumpMode] = useState(false)
+  // 向上滑动游标（最早消息）
   const [dateJumpCursorSortSeq, setDateJumpCursorSortSeq] = useState<number | null>(null)
   const [dateJumpCursorCreateTime, setDateJumpCursorCreateTime] = useState<number | null>(null)
   const [dateJumpCursorLocalId, setDateJumpCursorLocalId] = useState<number | null>(null)
+  // 向下滑动游标（最新消息）
+  const [dateJumpCursorSortSeqEnd, setDateJumpCursorSortSeqEnd] = useState<number | null>(null)
+  const [dateJumpCursorCreateTimeEnd, setDateJumpCursorCreateTimeEnd] = useState<number | null>(null)
+  const [dateJumpCursorLocalIdEnd, setDateJumpCursorLocalIdEnd] = useState<number | null>(null)
+  const [hasMoreMessagesAfter, setHasMoreMessagesAfter] = useState(false)
 
   // 更新状态管理
   const setIsUpdating = useUpdateStatusStore(state => state.setIsUpdating)
@@ -484,6 +490,10 @@ function ChatPage(_props: ChatPageProps) {
       setDateJumpCursorSortSeq(null)
       setDateJumpCursorCreateTime(null)
       setDateJumpCursorLocalId(null)
+      setDateJumpCursorSortSeqEnd(null)
+      setDateJumpCursorCreateTimeEnd(null)
+      setDateJumpCursorLocalIdEnd(null)
+      setHasMoreMessagesAfter(false)
       // 标记用户正在操作（首次加载）
       isUserOperatingRef.current = true
     } else {
@@ -700,6 +710,81 @@ function ChatPage(_props: ChatPageProps) {
     setLoadingMore
   ])
 
+  // 日期跳转模式：向下滑动加载更新的消息
+  const loadMoreMessagesAfterInDateJumpMode = useCallback(async () => {
+    if (!currentSessionId || dateJumpCursorSortSeqEnd === null || isLoadingMore || !hasMoreMessagesAfter) return
+
+    const listEl = messageListRef.current
+    if (!listEl) return
+
+    // 记录当前滚动位置和高度
+    const oldScrollHeight = listEl.scrollHeight
+    const oldScrollTop = listEl.scrollTop
+
+    setLoadingMore(true)
+    try {
+      const result = await window.electronAPI.chat.getMessagesAfter(
+        currentSessionId,
+        dateJumpCursorSortSeqEnd,
+        50,
+        dateJumpCursorCreateTimeEnd ?? undefined,
+        dateJumpCursorLocalIdEnd ?? undefined
+      )
+
+      if (result.success && result.messages) {
+        const existingKeys = new Set(
+          messagesRef.current.map(m => `${m.serverId}-${m.localId}-${m.createTime}-${m.sortSeq}`)
+        )
+        const uniqueNewerMessages = result.messages.filter(msg =>
+          !existingKeys.has(`${msg.serverId}-${msg.localId}-${msg.createTime}-${msg.sortSeq}`)
+        )
+
+        if (uniqueNewerMessages.length === 0) {
+          setHasMoreMessagesAfter(false)
+          return
+        }
+
+        // 追加到消息列表末尾
+        appendMessages(uniqueNewerMessages, false)
+
+        // 更新向下滑动游标
+        const newestMsg = uniqueNewerMessages[uniqueNewerMessages.length - 1]
+        const newestSortSeq = newestMsg?.sortSeq
+        const newestCreateTime = newestMsg?.createTime
+        const newestLocalId = newestMsg?.localId
+
+        if (typeof newestSortSeq !== 'number' || newestSortSeq <= dateJumpCursorSortSeqEnd) {
+          setHasMoreMessagesAfter(false)
+        } else {
+          setDateJumpCursorSortSeqEnd(newestSortSeq)
+          setDateJumpCursorCreateTimeEnd(typeof newestCreateTime === 'number' ? newestCreateTime : null)
+          setDateJumpCursorLocalIdEnd(typeof newestLocalId === 'number' ? newestLocalId : null)
+          setHasMoreMessagesAfter(result.hasMore ?? false)
+        }
+
+        // 保持滚动位置（向下加载时保持在原位置）
+        requestAnimationFrame(() => {
+          const newScrollHeight = listEl.scrollHeight
+          listEl.scrollTop = oldScrollTop + (newScrollHeight - oldScrollHeight)
+        })
+      } else {
+        setHasMoreMessagesAfter(false)
+      }
+    } catch (e) {
+      console.error('日期跳转模式向下加载失败:', e)
+    } finally {
+      setLoadingMore(false)
+    }
+  }, [
+    currentSessionId,
+    dateJumpCursorSortSeqEnd,
+    dateJumpCursorCreateTimeEnd,
+    dateJumpCursorLocalIdEnd,
+    isLoadingMore,
+    hasMoreMessagesAfter,
+    appendMessages
+  ])
+
   const handleScroll = useCallback(() => {
     if (!messageListRef.current) return
 
@@ -709,18 +794,34 @@ function ChatPage(_props: ChatPageProps) {
     const distanceFromBottom = scrollHeight - scrollTop - clientHeight
     setShowScrollToBottom(distanceFromBottom > 300)
 
-    // 预加载：当滚动到顶部 30% 区域时开始加载
-    if (!isLoadingMore && hasMoreMessages && currentSessionId) {
-      const threshold = clientHeight * 0.3
-      if (scrollTop < threshold) {
+    if (!isLoadingMore && currentSessionId) {
+      const topThreshold = clientHeight * 0.3
+      const bottomThreshold = clientHeight * 0.3
+
+      // 向上滑动：加载更早的消息
+      if (scrollTop < topThreshold && hasMoreMessages) {
         if (isDateJumpMode) {
           loadMoreMessagesInDateJumpMode()
         } else {
           loadMessages(currentSessionId, currentOffset)
         }
       }
+
+      // 向下滑动：加载更新的消息（仅在日期跳转模式下）
+      if (isDateJumpMode && distanceFromBottom < bottomThreshold && hasMoreMessagesAfter) {
+        loadMoreMessagesAfterInDateJumpMode()
+      }
     }
-  }, [isLoadingMore, hasMoreMessages, currentSessionId, currentOffset, isDateJumpMode, loadMoreMessagesInDateJumpMode])
+  }, [
+    isLoadingMore,
+    hasMoreMessages,
+    hasMoreMessagesAfter,
+    currentSessionId,
+    currentOffset,
+    isDateJumpMode,
+    loadMoreMessagesInDateJumpMode,
+    loadMoreMessagesAfterInDateJumpMode
+  ])
 
   // 滚动到底部
   const scrollToBottom = useCallback((smooth: boolean | React.MouseEvent = true) => {
@@ -760,9 +861,16 @@ function ChatPage(_props: ChatPageProps) {
         setHasMoreMessages(true)
         setCurrentOffset(result.messages.length)
         setIsDateJumpMode(true)
+        // 设置向上滑动游标（最早消息）
         setDateJumpCursorSortSeq(result.messages[0]?.sortSeq ?? null)
         setDateJumpCursorCreateTime(result.messages[0]?.createTime ?? null)
         setDateJumpCursorLocalId(result.messages[0]?.localId ?? null)
+        // 设置向下滑动游标（最新消息）
+        const lastMsg = result.messages[result.messages.length - 1]
+        setDateJumpCursorSortSeqEnd(lastMsg?.sortSeq ?? null)
+        setDateJumpCursorCreateTimeEnd(lastMsg?.createTime ?? null)
+        setDateJumpCursorLocalIdEnd(lastMsg?.localId ?? null)
+        setHasMoreMessagesAfter(true)
 
         // 滚动到顶部显示目标日期的消息
         requestAnimationFrame(() => {
