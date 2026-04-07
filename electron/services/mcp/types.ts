@@ -1,6 +1,7 @@
 export const MCP_TOOL_NAMES = [
   'health_check',
   'get_status',
+  'get_moments_timeline',
   'resolve_session',
   'export_chat',
   'list_sessions',
@@ -115,6 +116,99 @@ export interface McpStatusPayload {
     tools: McpToolName[]
   }
   warnings: string[]
+}
+
+export interface McpMomentLivePhoto {
+  url: string
+  thumb: string
+  md5?: string
+  token?: string
+  key?: string
+  encIdx?: string
+}
+
+export interface McpMomentMedia {
+  url: string
+  thumb: string
+  md5?: string
+  token?: string
+  key?: string
+  thumbKey?: string
+  encIdx?: string
+  livePhoto?: McpMomentLivePhoto
+  width?: number
+  height?: number
+}
+
+export interface McpMomentShareInfo {
+  title: string
+  description: string
+  contentUrl: string
+  thumbUrl: string
+  thumbKey?: string
+  thumbToken?: string
+  appName?: string
+  type?: number
+}
+
+export interface McpMomentCommentEmoji {
+  url: string
+  md5: string
+  width: number
+  height: number
+  encryptUrl?: string
+  aesKey?: string
+}
+
+export interface McpMomentCommentImage {
+  url: string
+  token?: string
+  key?: string
+  encIdx?: string
+  thumbUrl?: string
+  thumbUrlToken?: string
+  thumbKey?: string
+  thumbEncIdx?: string
+  width?: number
+  height?: number
+  heightPercentage?: number
+  fileSize?: number
+  minArea?: number
+  mediaId?: string
+  md5?: string
+}
+
+export interface McpMomentComment {
+  id: string
+  nickname: string
+  content: string
+  refCommentId: string
+  refNickname?: string
+  emojis?: McpMomentCommentEmoji[]
+  images?: McpMomentCommentImage[]
+}
+
+export interface McpMomentItem {
+  id: string
+  username: string
+  nickname: string
+  avatarUrl?: string
+  createTime: number
+  createTimeMs: number
+  contentDesc: string
+  type?: number
+  media: McpMomentMedia[]
+  shareInfo?: McpMomentShareInfo
+  likes: string[]
+  comments: McpMomentComment[]
+  rawXml?: string
+}
+
+export interface McpMomentsTimelinePayload {
+  items: McpMomentItem[]
+  offset: number
+  limit: number
+  hasMore: boolean
 }
 
 export interface McpSessionRef {

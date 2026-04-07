@@ -31,6 +31,27 @@ export function registerCipherTalkMcpTools(server: any) {
     }
   })
 
+  server.registerTool('get_moments_timeline', {
+    title: 'Get Moments Timeline',
+    description: 'Return structured Moments timeline posts with media, likes, comments, and share information.',
+    inputSchema: {
+      limit: z.number().int().positive().optional().describe('Pagination limit. Defaults to 20.'),
+      offset: z.number().int().nonnegative().optional().describe('Pagination offset. Defaults to 0.'),
+      usernames: z.array(z.string().trim().min(1)).optional().describe('Optional username filters.'),
+      keyword: z.string().optional().describe('Optional keyword filter.'),
+      startTime: z.number().int().positive().optional().describe('Optional start timestamp in seconds or milliseconds.'),
+      endTime: z.number().int().positive().optional().describe('Optional end timestamp in seconds or milliseconds.'),
+      includeRaw: z.boolean().optional().describe('Include raw XML when true.')
+    }
+  }, async (args: unknown) => {
+    try {
+      const payload = await readService.getMomentsTimeline((args || {}) as any)
+      return createToolSuccess(`Loaded ${payload.items.length} moments posts.`, payload)
+    } catch (error) {
+      return createToolError(error)
+    }
+  })
+
   server.registerTool('resolve_session', {
     title: 'Resolve Session',
     description: 'Resolve a fuzzy person/session clue into the most likely chat session, returning candidates, confidence, and recommended next action.',

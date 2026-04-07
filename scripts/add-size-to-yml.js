@@ -2,20 +2,14 @@ const fs = require('fs')
 const path = require('path')
 
 const releaseDir = path.join(__dirname, '../release')
-const ymlPath = path.join(releaseDir, 'latest.yml')
 
-if (!fs.existsSync(ymlPath)) {
-  console.log('latest.yml 不存在，跳过')
-  process.exit(0)
-}
-
-function getExeName(content) {
-  const pathMatch = content.match(/path:\s*(.+\.exe)/)
+function getArtifactName(content) {
+  const pathMatch = content.match(/path:\s*(.+\.(exe|dmg))/)
   if (pathMatch) {
     return pathMatch[1].trim()
   }
 
-  const urlMatch = content.match(/-\s+url:\s*(.+\.exe)/)
+  const urlMatch = content.match(/-\s+url:\s*(.+\.(exe|dmg))/)
   if (urlMatch) {
     return urlMatch[1].trim()
   }
@@ -40,7 +34,7 @@ function finalizeFileItem(itemLines, size) {
   return cleanedLines
 }
 
-function normalizeLatestYml(content, size) {
+function normalizeLatestYml(content, size, fileName) {
   const lines = content.split(/\r?\n/)
   const filesIndex = lines.findIndex((line) => line.trim() === 'files:')
   if (filesIndex === -1) {
@@ -94,29 +88,38 @@ function normalizeLatestYml(content, size) {
   return {
     changed: nextContent !== content,
     content: nextContent,
-    message: nextContent !== content ? `已规范 latest.yml 中的 size 字段为 ${size}` : 'latest.yml 中的 size 字段已正确'
+    message: nextContent !== content ? `已规范 ${fileName} 中的 size 字段为 ${size}` : `${fileName} 中的 size 字段已正确`
   }
 }
 
-const content = fs.readFileSync(ymlPath, 'utf-8')
-const exeName = getExeName(content)
+for (const fileName of ['latest.yml', 'latest-mac.yml']) {
+  const ymlPath = path.join(releaseDir, fileName)
 
-if (!exeName) {
-  console.log('未找到安装包文件名')
-  process.exit(0)
+  if (!fs.existsSync(ymlPath)) {
+    console.log(`${fileName} 不存在，跳过`)
+    continue
+  }
+
+  const content = fs.readFileSync(ymlPath, 'utf-8')
+  const artifactName = getArtifactName(content)
+
+  if (!artifactName) {
+    console.log(`${fileName} 未找到安装包文件名`)
+    continue
+  }
+
+  const artifactPath = path.join(releaseDir, artifactName)
+  if (!fs.existsSync(artifactPath)) {
+    console.log(`安装包不存在: ${artifactName}`)
+    continue
+  }
+
+  const size = fs.statSync(artifactPath).size
+  const result = normalizeLatestYml(content, size, fileName)
+
+  if (result.changed) {
+    fs.writeFileSync(ymlPath, result.content)
+  }
+
+  console.log(result.message)
 }
-
-const exePath = path.join(releaseDir, exeName)
-if (!fs.existsSync(exePath)) {
-  console.log(`安装包不存在: ${exeName}`)
-  process.exit(0)
-}
-
-const size = fs.statSync(exePath).size
-const result = normalizeLatestYml(content, size)
-
-if (result.changed) {
-  fs.writeFileSync(ymlPath, result.content)
-}
-
-console.log(result.message)

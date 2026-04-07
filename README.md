@@ -7,7 +7,7 @@
 **一款现代化的微信聊天记录查看与分析工具**
 
 [![License](https://img.shields.io/badge/license-CC--BY--NC--SA--4.0-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-3.0.1-green.svg)](package.json)
+[![Version](https://img.shields.io/badge/version-4.0.1-green.svg)](package.json)
 [![Platform](https://img.shields.io/badge/platform-Windows-0078D6.svg?logo=windows)]()
 [![Electron](https://img.shields.io/badge/Electron-39-47848F.svg?logo=electron)]()
 [![React](https://img.shields.io/badge/React-19-61DAFB.svg?logo=react)]()
@@ -204,7 +204,10 @@ npm run mcp
 
 ### 打包态启动
 
-安装版会附带 `ciphertalk-mcp.cmd` 伴随启动器，放在安装目录根部，可直接作为宿主的 `command` 使用。
+安装版会附带平台对应的 MCP 启动器，可直接作为宿主的 `command` 使用：
+
+- Windows：安装目录根部的 `ciphertalk-mcp.cmd`
+- macOS：`CipherTalk.app/Contents/MacOS/ciphertalk-mcp`
 
 ### 强制更新清单
 
@@ -303,6 +306,7 @@ AI 生成说明的密钥来源：
 
 - `health_check`
 - `get_status`
+- `get_moments_timeline`
 - `list_sessions`
 - `get_messages`
 - `list_contacts`
@@ -328,6 +332,8 @@ AI 生成说明的密钥来源：
 
 ### 宿主配置示例（打包态）
 
+Windows:
+
 ```json
 {
   "mcpServers": {
@@ -339,6 +345,22 @@ AI 生成说明的密钥来源：
   }
 }
 ```
+
+macOS:
+
+```json
+{
+  "mcpServers": {
+    "ciphertalk": {
+      "command": "/Applications/CipherTalk.app/Contents/MacOS/ciphertalk-mcp",
+      "args": [],
+      "cwd": "/Applications/CipherTalk.app/Contents/MacOS"
+    }
+  }
+}
+```
+
+macOS 打包态请直接指向 `.app` 内部的 `ciphertalk-mcp`，不要把 `CipherTalk.app` 本体当作 `command`。
 
 ### 参数示例
 
@@ -353,6 +375,25 @@ AI 生成说明的密钥来源：
   }
 }
 ```
+
+朋友圈时间线示例：
+
+```json
+{
+  "name": "get_moments_timeline",
+  "arguments": {
+    "limit": 20,
+    "offset": 0,
+    "usernames": ["wxid_xxx"],
+    "keyword": "旅行",
+    "startTime": 1704067200,
+    "endTime": 1735689599,
+    "includeRaw": false
+  }
+}
+```
+
+第一版返回朋友圈结构化时间线，不包含媒体下载或本地路径解析接口。
 
 ---
 

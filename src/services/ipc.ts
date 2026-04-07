@@ -6,6 +6,15 @@ export const config = {
   set: (key: string, value: unknown) => window.electronAPI.config.set(key, value)
 }
 
+export const accounts = {
+  list: () => window.electronAPI.accounts.list(),
+  getActive: () => window.electronAPI.accounts.getActive(),
+  setActive: (accountId: string) => window.electronAPI.accounts.setActive(accountId),
+  save: (profile: Parameters<typeof window.electronAPI.accounts.save>[0]) => window.electronAPI.accounts.save(profile),
+  update: (accountId: string, patch: Parameters<typeof window.electronAPI.accounts.update>[1]) => window.electronAPI.accounts.update(accountId, patch),
+  delete: (accountId: string, deleteLocalData?: boolean) => window.electronAPI.accounts.delete(accountId, deleteLocalData)
+}
+
 // 数据库
 export const db = {
   open: (dbPath: string, key?: string) => window.electronAPI.db.open(dbPath, key),

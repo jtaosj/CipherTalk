@@ -1,5 +1,6 @@
 // 配置服务 - 封装 Electron Store
-import { config } from './ipc'
+import { accounts, config } from './ipc'
+import type { AccountProfile, AccountProfileInput, AccountProfilePatch } from '../types/account'
 
 // 配置键名
 export const CONFIG_KEYS = {
@@ -36,6 +37,8 @@ export const CONFIG_KEYS = {
   AUTH_PASSWORD_SALT: 'authPasswordSalt',
   CLOSE_TO_TRAY: 'closeToTray'
 } as const
+
+export type { AccountProfile, AccountProfileInput, AccountProfilePatch }
 
 // 当前协议版本 - 更新协议内容时递增此版本号
 export const CURRENT_AGREEMENT_VERSION = 2
@@ -159,6 +162,30 @@ export async function getMyWxid(): Promise<string | null> {
 // 设置当前用户 wxid
 export async function setMyWxid(wxid: string): Promise<void> {
   await config.set(CONFIG_KEYS.MY_WXID, wxid)
+}
+
+export async function listAccounts(): Promise<AccountProfile[]> {
+  return accounts.list()
+}
+
+export async function getActiveAccount(): Promise<AccountProfile | null> {
+  return accounts.getActive()
+}
+
+export async function setActiveAccount(accountId: string): Promise<AccountProfile | null> {
+  return accounts.setActive(accountId)
+}
+
+export async function saveAccount(profile: AccountProfileInput): Promise<AccountProfile | null> {
+  return accounts.save(profile)
+}
+
+export async function updateAccount(accountId: string, patch: AccountProfilePatch): Promise<AccountProfile | null> {
+  return accounts.update(accountId, patch)
+}
+
+export async function deleteAccount(accountId: string, deleteLocalData = false): Promise<{ success: boolean; error?: string; deleted?: AccountProfile | null; nextActiveAccountId?: string }> {
+  return accounts.delete(accountId, deleteLocalData)
 }
 
 // 获取主题

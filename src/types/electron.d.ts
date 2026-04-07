@@ -1,5 +1,6 @@
 import type { ChatSession, Message, Contact, ContactInfo } from './models'
 import type { SummaryResult } from './ai'
+import type { AccountProfile } from './account'
 
 export interface ImageListItem {
   imagePath: string
@@ -33,7 +34,7 @@ export interface ElectronAPI {
     openAnnualReportWindow: (year: number) => Promise<boolean>
     openAgreementWindow: () => Promise<boolean>
     openPurchaseWindow: () => Promise<boolean>
-    openWelcomeWindow: () => Promise<boolean>
+    openWelcomeWindow: (mode?: 'default' | 'add-account') => Promise<boolean>
     completeWelcome: () => Promise<boolean>
     isChatWindowOpen: () => Promise<boolean>
     closeChatWindow: () => Promise<boolean>
@@ -56,6 +57,14 @@ export interface ElectronAPI {
     set: (key: string, value: unknown) => Promise<void>
     getTldCache: () => Promise<{ tlds: string[]; updatedAt: number } | null>
     setTldCache: (tlds: string[]) => Promise<void>
+  }
+  accounts: {
+    list: () => Promise<AccountProfile[]>
+    getActive: () => Promise<AccountProfile | null>
+    setActive: (accountId: string) => Promise<AccountProfile | null>
+    save: (profile: Omit<AccountProfile, 'id' | 'createdAt' | 'updatedAt' | 'lastUsedAt'>) => Promise<AccountProfile | null>
+    update: (accountId: string, patch: Partial<Omit<AccountProfile, 'id' | 'createdAt' | 'updatedAt' | 'lastUsedAt'>>) => Promise<AccountProfile | null>
+    delete: (accountId: string, deleteLocalData?: boolean) => Promise<{ success: boolean; error?: string; deleted?: AccountProfile | null; nextActiveAccountId?: string }>
   }
   db: {
     open: (dbPath: string, key?: string) => Promise<boolean>
@@ -82,6 +91,49 @@ export interface ElectronAPI {
   app: {
     getDownloadsPath: () => Promise<string>
     getVersion: () => Promise<string>
+    getPlatformInfo: () => Promise<{ platform: string; arch: string }>
+    getMcpLaunchConfig: () => Promise<{
+      command: string
+      args: string[]
+      cwd: string
+      mode: 'dev' | 'packaged'
+    } | null>
+    getUpdateState: () => Promise<{
+      hasUpdate: boolean
+      forceUpdate: boolean
+      currentVersion: string
+      version?: string
+      releaseNotes?: string
+      title?: string
+      message?: string
+      minimumSupportedVersion?: string
+      reason?: 'minimum-version' | 'blocked-version'
+      checkedAt: number
+      updateSource: 'github' | 'custom' | 'none'
+      policySource: 'github' | 'custom' | 'none'
+      diagnostics?: {
+        phase: 'idle' | 'checking' | 'available' | 'downloading' | 'downloaded' | 'installing' | 'failed'
+        strategy: 'unknown' | 'differential' | 'full'
+        fallbackToFull: boolean
+        lastError?: string
+        lastEvent?: string
+        progressPercent?: number
+        downloadedBytes?: number
+        totalBytes?: number
+        targetVersion?: string
+        lastUpdatedAt: number
+      }
+    } | null>
+    getUpdateSourceInfo: () => Promise<{
+      primaryUpdateSource: 'github'
+      githubRepository: {
+        owner: string
+        repo: string
+      }
+      policySources: Array<'github' | 'custom'>
+      policyPrecedence: 'github'
+      forceUpdatePolicyFallbackUrl: string
+    }>
     getMcpLaunchConfig: () => Promise<{
       command: string
       args: string[]
@@ -234,14 +286,17 @@ export interface ElectronAPI {
       error?: string
     }>
   }
-  // Windows Hello 原生验证 (比 WebAuthn 更快)
-  windowsHello: {
-    /** 检查 Windows Hello 是否可用 */
-    isAvailable: () => Promise<boolean>
-    /** 请求 Windows Hello 验证 */
-    verify: (message?: string) => Promise<{
+  systemAuth: {
+    getStatus: () => Promise<{
+      platform: string
+      available: boolean
+      method: 'windows-hello' | 'touch-id' | 'none'
+      displayName: string
+      error?: string
+    }>
+    verify: (reason?: string) => Promise<{
       success: boolean
-      result: number  // 0=成功, 1=设备不存在, 2=未配置, 3=策略禁用, 4=设备忙, 5=重试耗尽, 6=取消, 99=未知错误
+      method: 'windows-hello' | 'touch-id' | 'none'
       error?: string
     }>
   }
@@ -251,7 +306,7 @@ export interface ElectronAPI {
     killWeChat: () => Promise<boolean>
     launchWeChat: () => Promise<boolean>
     waitForWindow: (maxWaitSeconds?: number) => Promise<boolean>
-    startGetKey: (customWechatPath?: string) => Promise<{ success: boolean; key?: string; error?: string; needManualPath?: boolean }>
+    startGetKey: (customWechatPath?: string, dbPath?: string) => Promise<{ success: boolean; key?: string; error?: string; needManualPath?: boolean; validatedWxid?: string }>
     cancel: () => Promise<boolean>
     detectCurrentAccount: (dbPath?: string, maxTimeDiffMinutes?: number) => Promise<{ wxid: string; dbPath: string } | null>
     onStatus: (callback: (data: { status: string; level: number }) => void) => () => void
@@ -264,6 +319,7 @@ export interface ElectronAPI {
   }
   wcdb: {
     testConnection: (dbPath: string, hexKey: string, wxid: string, isAutoConnect?: boolean) => Promise<{ success: boolean; error?: string; sessionCount?: number }>
+    resolveValidWxid: (dbPath: string, hexKey: string) => Promise<{ success: boolean; wxid?: string; error?: string }>
     open: (dbPath: string, hexKey: string, wxid: string) => Promise<boolean>
     close: () => Promise<boolean>
     decryptDatabase: (dbPath: string, hexKey: string, wxid: string) => Promise<{ success: boolean; error?: string; totalFiles?: number; successCount?: number; failCount?: number }>
@@ -410,6 +466,18 @@ export interface ElectronAPI {
       error?: string
     }>
     getMessagesBefore: (
+      sessionId: string,
+      cursorSortSeq: number,
+      limit?: number,
+      cursorCreateTime?: number,
+      cursorLocalId?: number
+    ) => Promise<{
+      success: boolean;
+      messages?: Message[];
+      hasMore?: boolean;
+      error?: string
+    }>
+    getMessagesAfter: (
       sessionId: string,
       cursorSortSeq: number,
       limit?: number,
@@ -753,6 +821,8 @@ export interface ElectronAPI {
     clearDatabases: () => Promise<{ success: boolean; error?: string }>
     clearAll: () => Promise<{ success: boolean; error?: string }>
     clearConfig: () => Promise<{ success: boolean; error?: string }>
+    clearCurrentAccount: (deleteLocalData?: boolean) => Promise<{ success: boolean; error?: string }>
+    clearAllAccountConfigs: () => Promise<{ success: boolean; error?: string }>
     getCacheSize: () => Promise<{
       success: boolean;
       error?: string;

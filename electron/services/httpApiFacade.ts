@@ -5,6 +5,7 @@ import { join } from 'path'
 import { ConfigService } from './config'
 import { chatService } from './chatService'
 import { imageDecryptService } from './imageDecryptService'
+import { snsService } from './snsService'
 import { videoService } from './videoService'
 import { getAppVersion } from './runtimePaths'
 
@@ -84,6 +85,16 @@ export interface QueryContactsInput {
   sort?: string
   offset?: number
   limit?: number
+}
+
+export interface QuerySnsInput {
+  limit?: number
+  offset?: number
+  usernames?: string[] | null
+  keyword?: string
+  startTime?: number | null
+  endTime?: number | null
+  includeRaw?: boolean
 }
 
 function parseBoolean(value: string | null | undefined, defaultValue: boolean): boolean {
@@ -925,5 +936,68 @@ export async function queryContacts(input: QueryContactsInput) {
       includeAvatar
     },
     contacts: finalContacts
+  }
+}
+
+export async function querySnsTimeline(input: QuerySnsInput) {
+  const limit = parseIntInRange(input.limit, 20, 1, 200)
+  const offset = parseIntInRange(input.offset, 0, 0, 100000)
+  const includeRaw = Boolean(input.includeRaw)
+  const usernames = input.usernames?.map((item) => String(item || '').trim()).filter(Boolean) || undefined
+  const keyword = String(input.keyword || '').trim() || undefined
+  const startTime = parseTimestampMs(input.startTime)
+  const endTime = parseTimestampMs(input.endTime)
+
+  const normalizedStartTime = startTime ? Math.floor(startTime / 1000) : undefined
+  const normalizedEndTime = endTime ? Math.floor(endTime / 1000) : undefined
+
+  const result = await snsService.getTimeline(
+    limit,
+    offset,
+    usernames,
+    keyword,
+    normalizedStartTime,
+    normalizedEndTime
+  )
+
+  if (!result.success) {
+    throw new ApiQueryError(
+      503,
+      'DB_NOT_READY',
+      result.error || 'Failed to read moments timeline',
+      '请先在首页或设置中完成数据库解密与连接，然后再调用 /v1/sns'
+    )
+  }
+
+  const items = (result.timeline || []).map((item) => ({
+    id: String(item.id || ''),
+    username: String(item.username || ''),
+    nickname: String(item.nickname || item.username || ''),
+    avatarUrl: item.avatarUrl || null,
+    createTime: Number(item.createTime || 0),
+    createTimeMs: normalizeTimestampMs(Number(item.createTime || 0)),
+    contentDesc: String(item.contentDesc || ''),
+    type: item.type ?? null,
+    media: Array.isArray(item.media) ? item.media : [],
+    shareInfo: item.shareInfo || null,
+    likes: Array.isArray(item.likes) ? item.likes : [],
+    comments: Array.isArray(item.comments) ? item.comments : [],
+    ...(includeRaw ? { rawXml: item.rawXml || null } : {})
+  }))
+
+  const hasMore = items.length >= limit
+  return {
+    total: hasMore ? null : offset + items.length,
+    offset,
+    limit,
+    hasMore,
+    filters: {
+      usernames: usernames || null,
+      keyword: keyword || '',
+      startTime: startTime,
+      endTime: endTime,
+      includeRaw
+    },
+    items
   }
 }

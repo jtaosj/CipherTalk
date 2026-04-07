@@ -6,6 +6,7 @@ import { writeFile } from 'fs/promises'
 import { join } from 'path'
 import { ConfigService } from './config'
 import { chatService } from './chatService'
+import { querySnsTimeline } from './httpApiFacade'
 import { imageDecryptService } from './imageDecryptService'
 import { videoService } from './videoService'
 
@@ -145,7 +146,8 @@ class HttpApiService {
         { method: 'GET', path: '/v1/status', desc: '服务状态' },
         { method: 'GET', path: '/v1/sessions', desc: '会话列表' },
         { method: 'GET', path: '/v1/messages', desc: '会话消息' },
-        { method: 'GET', path: '/v1/contacts', desc: '联系人列表' }
+        { method: 'GET', path: '/v1/contacts', desc: '联系人列表' },
+        { method: 'GET', path: '/v1/sns', desc: '朋友圈时间线' }
       ],
       lastError: this.startError
     }
@@ -491,6 +493,10 @@ class HttpApiService {
     }
     if (pathname === '/api/v1/contacts') {
       this.sendRedirect(res, '/v1/contacts')
+      return
+    }
+    if (pathname === '/api/v1/sns') {
+      this.sendRedirect(res, '/v1/sns')
       return
     }
     if (pathname === '/') {
@@ -1219,6 +1225,32 @@ class HttpApiService {
       return
     }
 
+    if (pathname === '/v1/sns') {
+      try {
+        const usernames = (url.searchParams.get('usernames') || '')
+          .split(',')
+          .map((x) => x.trim())
+          .filter(Boolean)
+        const payload = await querySnsTimeline({
+          limit: this.parseIntInRange(url.searchParams.get('limit'), 20, 1, 200),
+          offset: this.parseIntInRange(url.searchParams.get('offset'), 0, 0, 100000),
+          usernames: usernames.length > 0 ? usernames : null,
+          keyword: (url.searchParams.get('keyword') || '').trim() || undefined,
+          startTime: this.parseTimestampMs(url.searchParams.get('startTime')),
+          endTime: this.parseTimestampMs(url.searchParams.get('endTime')),
+          includeRaw: this.parseBoolean(url.searchParams.get('includeRaw'), false)
+        })
+        this.sendJson(res, 200, this.success(requestId, payload))
+      } catch (error: any) {
+        const statusCode = Number(error?.statusCode) || 500
+        const code = String(error?.code || 'INTERNAL_ERROR')
+        const message = String(error?.message || 'Failed to read moments timeline')
+        const hint = typeof error?.hint === 'string' ? error.hint : 'Try GET /v1 or /v1/status to inspect API availability, or use /v1/sns with valid query params.'
+        this.sendJson(res, statusCode, this.failure(requestId, code, message, hint))
+      }
+      return
+    }
+
     this.sendJson(
       res,
       404,
@@ -1226,7 +1258,7 @@ class HttpApiService {
         requestId,
         'NOT_FOUND',
         'Route not found',
-        'Try GET /v1 for API overview, or use /v1/health and /v1/status'
+        'Try GET /v1 for API overview, or use /v1/health, /v1/status, /v1/messages, /v1/contacts, /v1/sessions, /v1/sns'
       )
     )
   }

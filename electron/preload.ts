@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron'
+import type { AccountProfile } from '../src/types/account'
 
 function getMcpLaunchConfigSafe(): Promise<{
   command: string
@@ -31,6 +32,17 @@ contextBridge.exposeInMainWorld('electronAPI', {
     set: (key: string, value: any) => ipcRenderer.invoke('config:set', key, value),
     getTldCache: () => ipcRenderer.invoke('config:getTldCache'),
     setTldCache: (tlds: string[]) => ipcRenderer.invoke('config:setTldCache', tlds)
+  },
+
+  accounts: {
+    list: () => ipcRenderer.invoke('accounts:list') as Promise<AccountProfile[]>,
+    getActive: () => ipcRenderer.invoke('accounts:getActive') as Promise<AccountProfile | null>,
+    setActive: (accountId: string) => ipcRenderer.invoke('accounts:setActive', accountId) as Promise<AccountProfile | null>,
+    save: (profile: Omit<AccountProfile, 'id' | 'createdAt' | 'updatedAt' | 'lastUsedAt'>) => ipcRenderer.invoke('accounts:save', profile) as Promise<AccountProfile | null>,
+    update: (accountId: string, patch: Partial<Omit<AccountProfile, 'id' | 'createdAt' | 'updatedAt' | 'lastUsedAt'>>) =>
+      ipcRenderer.invoke('accounts:update', accountId, patch) as Promise<AccountProfile | null>,
+    delete: (accountId: string, deleteLocalData?: boolean) =>
+      ipcRenderer.invoke('accounts:delete', accountId, deleteLocalData) as Promise<{ success: boolean; error?: string; deleted?: AccountProfile | null; nextActiveAccountId?: string }>
   },
 
   // 数据库操作
@@ -70,6 +82,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   app: {
     getDownloadsPath: () => ipcRenderer.invoke('app:getDownloadsPath'),
     getVersion: () => ipcRenderer.invoke('app:getVersion'),
+    getPlatformInfo: () => ipcRenderer.invoke('app:getPlatformInfo'),
     getMcpLaunchConfig: () => getMcpLaunchConfigSafe(),
     getUpdateState: () => ipcRenderer.invoke('app:getUpdateState'),
     getUpdateSourceInfo: () => ipcRenderer.invoke('app:getUpdateSourceInfo'),
@@ -127,7 +140,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     openAnnualReportWindow: (year: number) => ipcRenderer.invoke('window:openAnnualReportWindow', year),
     openAgreementWindow: () => ipcRenderer.invoke('window:openAgreementWindow'),
     openPurchaseWindow: () => ipcRenderer.invoke('window:openPurchaseWindow'),
-    openWelcomeWindow: () => ipcRenderer.invoke('window:openWelcomeWindow'),
+    openWelcomeWindow: (mode?: 'default' | 'add-account') => ipcRenderer.invoke('window:openWelcomeWindow', mode),
     completeWelcome: () => ipcRenderer.invoke('window:completeWelcome'),
     isChatWindowOpen: () => ipcRenderer.invoke('window:isChatWindowOpen'),
     closeChatWindow: () => ipcRenderer.invoke('window:closeChatWindow'),
@@ -157,12 +170,17 @@ contextBridge.exposeInMainWorld('electronAPI', {
     }
   },
 
-  // Windows Hello 原生验证 (比 WebAuthn 更快)
-  windowsHello: {
-    isAvailable: () => ipcRenderer.invoke('windowsHello:isAvailable') as Promise<boolean>,
-    verify: (message?: string) => ipcRenderer.invoke('windowsHello:verify', message) as Promise<{
+  systemAuth: {
+    getStatus: () => ipcRenderer.invoke('systemAuth:getStatus') as Promise<{
+      platform: string
+      available: boolean
+      method: 'windows-hello' | 'touch-id' | 'none'
+      displayName: string
+      error?: string
+    }>,
+    verify: (reason?: string) => ipcRenderer.invoke('systemAuth:verify', reason) as Promise<{
       success: boolean
-      result: number  // WindowsHelloResult 枚举值
+      method: 'windows-hello' | 'touch-id' | 'none'
       error?: string
     }>
   },
@@ -174,7 +192,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     killWeChat: () => ipcRenderer.invoke('wxkey:killWeChat'),
     launchWeChat: () => ipcRenderer.invoke('wxkey:launchWeChat'),
     waitForWindow: (maxWaitSeconds?: number) => ipcRenderer.invoke('wxkey:waitForWindow', maxWaitSeconds),
-    startGetKey: (customWechatPath?: string) => ipcRenderer.invoke('wxkey:startGetKey', customWechatPath),
+    startGetKey: (customWechatPath?: string, dbPath?: string) => ipcRenderer.invoke('wxkey:startGetKey', customWechatPath, dbPath),
     cancel: () => ipcRenderer.invoke('wxkey:cancel'),
     detectCurrentAccount: (dbPath?: string, maxTimeDiffMinutes?: number) => ipcRenderer.invoke('wxkey:detectCurrentAccount', dbPath, maxTimeDiffMinutes),
     onStatus: (callback: (data: { status: string; level: number }) => void) => {
@@ -195,6 +213,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   wcdb: {
     testConnection: (dbPath: string, hexKey: string, wxid: string, isAutoConnect?: boolean) =>
       ipcRenderer.invoke('wcdb:testConnection', dbPath, hexKey, wxid, isAutoConnect),
+    resolveValidWxid: (dbPath: string, hexKey: string) =>
+      ipcRenderer.invoke('wcdb:resolveValidWxid', dbPath, hexKey),
     open: (dbPath: string, hexKey: string, wxid: string) =>
       ipcRenderer.invoke('wcdb:open', dbPath, hexKey, wxid),
     close: () => ipcRenderer.invoke('wcdb:close'),
@@ -297,6 +317,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
       cursorLocalId?: number
     ) =>
       ipcRenderer.invoke('chat:getMessagesBefore', sessionId, cursorSortSeq, limit, cursorCreateTime, cursorLocalId),
+    getMessagesAfter: (
+      sessionId: string,
+      cursorSortSeq: number,
+      limit?: number,
+      cursorCreateTime?: number,
+      cursorLocalId?: number
+    ) =>
+      ipcRenderer.invoke('chat:getMessagesAfter', sessionId, cursorSortSeq, limit, cursorCreateTime, cursorLocalId),
     getAllVoiceMessages: (sessionId: string) =>
       ipcRenderer.invoke('chat:getAllVoiceMessages', sessionId),
     getAllImageMessages: (sessionId: string) =>
@@ -397,6 +425,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     clearDatabases: () => ipcRenderer.invoke('cache:clearDatabases'),
     clearAll: () => ipcRenderer.invoke('cache:clearAll'),
     clearConfig: () => ipcRenderer.invoke('cache:clearConfig'),
+    clearCurrentAccount: (deleteLocalData?: boolean) => ipcRenderer.invoke('cache:clearCurrentAccount', deleteLocalData),
+    clearAllAccountConfigs: () => ipcRenderer.invoke('cache:clearAllAccountConfigs'),
     getCacheSize: () => ipcRenderer.invoke('cache:getCacheSize')
   },
   log: {

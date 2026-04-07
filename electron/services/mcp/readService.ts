@@ -7,6 +7,7 @@ import { chatService, type ChatSession, type ContactInfo, type Message } from '.
 import { ConfigService } from '../config'
 import { exportService, type ExportOptions as ExportServiceOptions } from '../exportService'
 import { imageDecryptService } from '../imageDecryptService'
+import { snsService } from '../snsService'
 import { videoService } from '../videoService'
 import { McpToolError } from './result'
 import {
@@ -25,6 +26,8 @@ import {
   type McpContactRankingItem,
   type McpContactRankingsPayload,
   type McpActivityDistributionPayload,
+  type McpMomentItem,
+  type McpMomentsTimelinePayload,
   type McpMessageItem,
   type McpMessageKind,
   type McpMessageMatchField,
@@ -129,6 +132,16 @@ const analyticsTimeRangeArgsSchema = z.object({
   endTime: z.number().int().positive().optional()
 })
 
+const getMomentsTimelineArgsSchema = z.object({
+  limit: z.number().int().positive().optional(),
+  offset: z.number().int().nonnegative().optional(),
+  usernames: z.array(z.string().trim().min(1)).optional(),
+  keyword: z.string().optional(),
+  startTime: z.number().int().positive().optional(),
+  endTime: z.number().int().positive().optional(),
+  includeRaw: z.boolean().optional()
+})
+
 const contactRankingsArgsSchema = analyticsTimeRangeArgsSchema.extend({
   limit: z.number().int().positive().optional()
 })
@@ -163,6 +176,7 @@ type ExportChatArgs = z.infer<typeof exportChatArgsSchema>
 type GetMessagesArgs = z.infer<typeof getMessagesArgsSchema>
 type ListContactsArgs = z.infer<typeof listContactsArgsSchema>
 type SearchMessagesArgs = z.infer<typeof searchMessagesArgsSchema>
+type GetMomentsTimelineArgs = z.infer<typeof getMomentsTimelineArgsSchema>
 type GetSessionContextArgs = z.infer<typeof getSessionContextArgsSchema>
 type ContactWithLastContact = ContactInfo & { lastContactTime?: number }
 type MessageNormalizeOptions = {
@@ -665,6 +679,82 @@ function buildSearchSessionSummaries(hits: McpSearchHit[]): McpSearchMessagesPay
 
   return Array.from(grouped.values())
     .sort((a, b) => b.hitCount - a.hitCount || b.topScore - a.topScore)
+}
+
+function toMomentItem(raw: any, includeRaw: boolean): McpMomentItem {
+  return {
+    id: String(raw.id || ''),
+    username: String(raw.username || ''),
+    nickname: String(raw.nickname || raw.username || ''),
+    avatarUrl: raw.avatarUrl || undefined,
+    createTime: Number(raw.createTime || 0),
+    createTimeMs: toTimestampMs(Number(raw.createTime || 0)),
+    contentDesc: String(raw.contentDesc || ''),
+    type: raw.type !== undefined ? Number(raw.type) : undefined,
+    media: Array.isArray(raw.media) ? raw.media.map((item: any) => ({
+      url: String(item.url || ''),
+      thumb: String(item.thumb || ''),
+      md5: item.md5 || undefined,
+      token: item.token || undefined,
+      key: item.key || undefined,
+      thumbKey: item.thumbKey || undefined,
+      encIdx: item.encIdx || undefined,
+      width: item.width !== undefined ? Number(item.width) : undefined,
+      height: item.height !== undefined ? Number(item.height) : undefined,
+      livePhoto: item.livePhoto ? {
+        url: String(item.livePhoto.url || ''),
+        thumb: String(item.livePhoto.thumb || ''),
+        md5: item.livePhoto.md5 || undefined,
+        token: item.livePhoto.token || undefined,
+        key: item.livePhoto.key || undefined,
+        encIdx: item.livePhoto.encIdx || undefined
+      } : undefined
+    })) : [],
+    shareInfo: raw.shareInfo ? {
+      title: String(raw.shareInfo.title || ''),
+      description: String(raw.shareInfo.description || ''),
+      contentUrl: String(raw.shareInfo.contentUrl || ''),
+      thumbUrl: String(raw.shareInfo.thumbUrl || ''),
+      thumbKey: raw.shareInfo.thumbKey || undefined,
+      thumbToken: raw.shareInfo.thumbToken || undefined,
+      appName: raw.shareInfo.appName || undefined,
+      type: raw.shareInfo.type !== undefined ? Number(raw.shareInfo.type) : undefined
+    } : undefined,
+    likes: Array.isArray(raw.likes) ? raw.likes.map((item: any) => String(item || '')).filter(Boolean) : [],
+    comments: Array.isArray(raw.comments) ? raw.comments.map((item: any) => ({
+      id: String(item.id || ''),
+      nickname: String(item.nickname || ''),
+      content: String(item.content || ''),
+      refCommentId: String(item.refCommentId || ''),
+      refNickname: item.refNickname || undefined,
+      emojis: Array.isArray(item.emojis) ? item.emojis.map((emoji: any) => ({
+        url: String(emoji.url || ''),
+        md5: String(emoji.md5 || ''),
+        width: Number(emoji.width || 0),
+        height: Number(emoji.height || 0),
+        encryptUrl: emoji.encryptUrl || undefined,
+        aesKey: emoji.aesKey || undefined
+      })) : [],
+      images: Array.isArray(item.images) ? item.images.map((image: any) => ({
+        url: String(image.url || ''),
+        token: image.token || undefined,
+        key: image.key || undefined,
+        encIdx: image.encIdx || undefined,
+        thumbUrl: image.thumbUrl || undefined,
+        thumbUrlToken: image.thumbUrlToken || undefined,
+        thumbKey: image.thumbKey || undefined,
+        thumbEncIdx: image.thumbEncIdx || undefined,
+        width: image.width !== undefined ? Number(image.width) : undefined,
+        height: image.height !== undefined ? Number(image.height) : undefined,
+        heightPercentage: image.heightPercentage !== undefined ? Number(image.heightPercentage) : undefined,
+        fileSize: image.fileSize !== undefined ? Number(image.fileSize) : undefined,
+        minArea: image.minArea !== undefined ? Number(image.minArea) : undefined,
+        mediaId: image.mediaId || undefined,
+        md5: image.md5 || undefined
+      })) : []
+    })) : [],
+    rawXml: includeRaw ? (raw.rawXml ? String(raw.rawXml) : undefined) : undefined
+  }
 }
 
 function getDefaultExportPath(): string | null {
@@ -1564,6 +1654,40 @@ export class McpReadService {
     return {
       ...result.data,
       timeRange: buildTimeRange(args.data.startTime, args.data.endTime)
+    }
+  }
+
+  async getMomentsTimeline(rawArgs: GetMomentsTimelineArgs): Promise<McpMomentsTimelinePayload> {
+    const args = getMomentsTimelineArgsSchema.safeParse(rawArgs)
+    if (!args.success) {
+      throw new McpToolError('BAD_REQUEST', 'Invalid get_moments_timeline arguments.', args.error.message)
+    }
+
+    const limit = Math.min(args.data.limit ?? 20, MAX_LIST_LIMIT)
+    const offset = Math.max(0, args.data.offset ?? 0)
+    const includeRaw = args.data.includeRaw ?? false
+    const result = await snsService.getTimeline(
+      limit,
+      offset,
+      args.data.usernames,
+      args.data.keyword,
+      args.data.startTime,
+      args.data.endTime
+    )
+
+    if (!result.success) {
+      if (String(result.error || '').includes('请先')) {
+        throw new McpToolError('DB_NOT_READY', result.error || '朋友圈数据库未就绪。')
+      }
+      throw new McpToolError('INTERNAL_ERROR', result.error || 'Failed to load moments timeline.')
+    }
+
+    const rawItems = result.timeline || []
+    return {
+      items: rawItems.map((item) => toMomentItem(item, includeRaw)),
+      offset,
+      limit,
+      hasMore: rawItems.length >= limit
     }
   }
 

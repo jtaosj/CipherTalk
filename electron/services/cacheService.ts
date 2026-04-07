@@ -2,9 +2,46 @@ import { join } from 'path'
 import { existsSync, rmSync, readdirSync, statSync } from 'fs'
 import { app } from 'electron'
 import { ConfigService } from './config'
+import type { AccountProfile } from '../../src/types/account'
 
 export class CacheService {
   constructor(private configService: ConfigService) {}
+
+  private getEffectiveCachePathFor(cachePath?: string): string {
+    if (cachePath && cachePath.trim()) return cachePath.trim()
+    return this.getEffectiveCachePath()
+  }
+
+  private async deleteAccountDatabaseFolder(wxid: string, cachePath?: string): Promise<{ success: boolean; error?: string }> {
+    if (!wxid) {
+      return { success: false, error: '未配置 wxid' }
+    }
+
+    try {
+      const targetCachePath = this.getEffectiveCachePathFor(cachePath)
+      if (!existsSync(targetCachePath)) {
+        return { success: true }
+      }
+
+      const possibleFolderNames = [
+        wxid,
+        wxid.replace('wxid_', ''),
+        wxid.split('_').slice(0, 2).join('_'),
+      ]
+
+      for (const folderName of possibleFolderNames) {
+        const wxidFolderPath = join(targetCachePath, folderName)
+        if (existsSync(wxidFolderPath)) {
+          rmSync(wxidFolderPath, { recursive: true, force: true })
+          return { success: true }
+        }
+      }
+
+      return { success: true }
+    } catch (e: any) {
+      return { success: false, error: e.message || String(e) }
+    }
+  }
 
   /**
    * 获取有效的缓存路径
@@ -152,34 +189,9 @@ export class CacheService {
       if (!existsSync(cachePath)) {
         return { success: true }
       }
-
-      // 查找并删除 wxid 文件夹（包含所有解密后的数据库）
-      const possibleFolderNames = [
-        wxid,
-        (wxid as string).replace('wxid_', ''),
-        (wxid as string).split('_').slice(0, 2).join('_'),
-      ]
-      
-      let deleted = false
-      for (const folderName of possibleFolderNames) {
-        const wxidFolderPath = join(cachePath, folderName)
-        if (existsSync(wxidFolderPath)) {
-          console.log('[CacheService] 找到 wxid 文件夹，准备删除:', wxidFolderPath)
-          try {
-            rmSync(wxidFolderPath, { recursive: true, force: true })
-            console.log('[CacheService] 成功删除 wxid 文件夹')
-            deleted = true
-            break
-          } catch (e: any) {
-            console.error('[CacheService] 删除 wxid 文件夹失败:', e)
-            return { success: false, error: `删除失败: ${e.message}` }
-          }
-        }
-      }
-
-      if (!deleted) {
-        console.warn('[CacheService] 未找到 wxid 文件夹')
-        return { success: false, error: '未找到数据库缓存文件夹' }
+      const deleteResult = await this.deleteAccountDatabaseFolder(wxid, cachePath)
+      if (!deleteResult.success) {
+        return deleteResult
       }
 
       console.log('[CacheService] 数据库缓存清理完成')
@@ -285,21 +297,41 @@ export class CacheService {
    */
   async clearConfig(): Promise<{ success: boolean; error?: string }> {
     try {
-      // 清除所有配置项
-      const configKeys = [
-        'decryptKey',
-        'dbPath', 
-        'myWxid',
-        'cachePath',
-        'imageXorKey',
-        'imageAesKey',
-        'exportPath'
-      ]
+      this.configService.clearAllAccountsAndAccountConfig()
+      return { success: true }
+    } catch (e) {
+      return { success: false, error: String(e) }
+    }
+  }
 
-      for (const key of configKeys) {
-        this.configService.set(key as any, '' as any)
+  async clearAccountDatabases(account: Pick<AccountProfile, 'wxid' | 'cachePath'>): Promise<{ success: boolean; error?: string }> {
+    return this.deleteAccountDatabaseFolder(account.wxid, account.cachePath)
+  }
+
+  async clearCurrentAccount(deleteLocalData = false): Promise<{ success: boolean; error?: string }> {
+    try {
+      const active = this.configService.getActiveAccount()
+      if (!active) {
+        return { success: false, error: '当前没有可清除的账号' }
       }
 
+      if (deleteLocalData) {
+        const clearResult = await this.clearAccountDatabases(active)
+        if (!clearResult.success) {
+          return clearResult
+        }
+      }
+
+      this.configService.clearCurrentAccount()
+      return { success: true }
+    } catch (e) {
+      return { success: false, error: String(e) }
+    }
+  }
+
+  async clearAllAccountConfigs(): Promise<{ success: boolean; error?: string }> {
+    try {
+      this.configService.clearAllAccountsAndAccountConfig()
       return { success: true }
     } catch (e) {
       return { success: false, error: String(e) }

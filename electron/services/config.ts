@@ -2,12 +2,33 @@ import Database from 'better-sqlite3'
 import path from 'path'
 import fs from 'fs'
 import { getUserDataPath } from './runtimePaths'
+import type { AccountProfile, AccountProfileInput, AccountProfilePatch } from '../../src/types/account'
+
+const ACCOUNT_FIELD_KEYS = new Set([
+  'dbPath',
+  'decryptKey',
+  'myWxid',
+  'cachePath',
+  'imageXorKey',
+  'imageAesKey'
+])
+
+const ACCOUNT_CONFIG_CLEAR_KEYS = [
+  'decryptKey',
+  'dbPath',
+  'myWxid',
+  'cachePath',
+  'imageXorKey',
+  'imageAesKey'
+] as const
 
 interface ConfigSchema {
   // 数据库相关
   dbPath: string
   decryptKey: string
   myWxid: string
+  accounts: AccountProfile[]
+  activeAccountId: string
 
   // 图片解密相关
   imageXorKey: string
@@ -91,6 +112,8 @@ const defaults: ConfigSchema = {
   dbPath: '',
   decryptKey: '',
   myWxid: '',
+  accounts: [],
+  activeAccountId: '',
   imageXorKey: '',
   imageAesKey: '',
   emoticonUin: '',
@@ -187,6 +210,8 @@ export class ConfigService {
         insertStmt.run(key, JSON.stringify(value))
       }
 
+      this.migrateLegacySingleAccount()
+
       // 迁移：修复旧版本产生的空 STT 语言配置，默认为中文
       try {
         const sttRow = this.db.prepare("SELECT value FROM config WHERE key = 'sttLanguages'").get() as { value: string } | undefined
@@ -261,16 +286,310 @@ export class ConfigService {
     }
   }
 
+  private getStoredValue<K extends keyof ConfigSchema>(key: K): ConfigSchema[K] {
+    if (!this.db) {
+      return defaults[key]
+    }
+
+    const row = this.db.prepare('SELECT value FROM config WHERE key = ?').get(key) as { value: string } | undefined
+    if (row) {
+      return JSON.parse(row.value)
+    }
+
+    return defaults[key]
+  }
+
+  private setStoredValue<K extends keyof ConfigSchema>(key: K, value: ConfigSchema[K]): void {
+    if (!this.db) return
+    this.db.prepare(`
+      INSERT OR REPLACE INTO config (key, value) VALUES (?, ?)
+    `).run(key, JSON.stringify(value))
+  }
+
+  private createAccountId(): string {
+    return `acct_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
+  }
+
+  private normalizeAccountInput(profile: Partial<AccountProfileInput>, fallback?: AccountProfile): AccountProfileInput {
+    const wxid = String(profile.wxid ?? fallback?.wxid ?? '').trim()
+    const dbPath = String(profile.dbPath ?? fallback?.dbPath ?? '').trim()
+    const decryptKey = String(profile.decryptKey ?? fallback?.decryptKey ?? '').trim()
+    const cachePath = String(profile.cachePath ?? fallback?.cachePath ?? '').trim()
+    const imageXorKey = String(profile.imageXorKey ?? fallback?.imageXorKey ?? '').trim()
+    const imageAesKey = String(profile.imageAesKey ?? fallback?.imageAesKey ?? '').trim()
+    const displayName = String(profile.displayName ?? fallback?.displayName ?? wxid || '未命名账号').trim() || wxid || '未命名账号'
+
+    return {
+      wxid,
+      dbPath,
+      decryptKey,
+      cachePath,
+      imageXorKey,
+      imageAesKey,
+      displayName
+    }
+  }
+
+  private normalizeAccountProfile(raw: any): AccountProfile {
+    const now = Date.now()
+    const base = this.normalizeAccountInput(raw || {})
+    return {
+      id: String(raw?.id || this.createAccountId()),
+      ...base,
+      createdAt: Number(raw?.createdAt) || now,
+      updatedAt: Number(raw?.updatedAt) || now,
+      lastUsedAt: Number(raw?.lastUsedAt) || now
+    }
+  }
+
+  private getAccountsRaw(): AccountProfile[] {
+    const accounts = this.getStoredValue('accounts')
+    if (!Array.isArray(accounts)) return []
+    return accounts.map((item) => this.normalizeAccountProfile(item))
+  }
+
+  private setAccountsRaw(accounts: AccountProfile[]): void {
+    this.setStoredValue('accounts', accounts)
+  }
+
+  private getActiveAccountIdRaw(): string {
+    return String(this.getStoredValue('activeAccountId') || '')
+  }
+
+  private setActiveAccountIdRaw(accountId: string): void {
+    this.setStoredValue('activeAccountId', accountId)
+  }
+
+  private getAccountFieldValue(account: AccountProfile | null, key: keyof ConfigSchema): any {
+    if (!account) return defaults[key]
+
+    switch (key) {
+      case 'dbPath':
+        return account.dbPath
+      case 'decryptKey':
+        return account.decryptKey
+      case 'myWxid':
+        return account.wxid
+      case 'cachePath':
+        return account.cachePath
+      case 'imageXorKey':
+        return account.imageXorKey
+      case 'imageAesKey':
+        return account.imageAesKey
+      default:
+        return defaults[key]
+    }
+  }
+
+  private setAccountField(account: AccountProfile, key: keyof ConfigSchema, value: any): AccountProfile {
+    const next = { ...account, updatedAt: Date.now() }
+    const normalized = String(value ?? '').trim()
+
+    switch (key) {
+      case 'dbPath':
+        next.dbPath = normalized
+        break
+      case 'decryptKey':
+        next.decryptKey = normalized
+        break
+      case 'myWxid':
+        next.wxid = normalized
+        if (!next.displayName || next.displayName === account.wxid || next.displayName === '未命名账号') {
+          next.displayName = normalized || '未命名账号'
+        }
+        break
+      case 'cachePath':
+        next.cachePath = normalized
+        break
+      case 'imageXorKey':
+        next.imageXorKey = normalized
+        break
+      case 'imageAesKey':
+        next.imageAesKey = normalized
+        break
+    }
+
+    return next
+  }
+
+  private ensureActiveAccount(): AccountProfile {
+    const active = this.getActiveAccount()
+    if (active) return active
+
+    const empty = this.normalizeAccountProfile({
+      id: this.createAccountId(),
+      displayName: '未命名账号'
+    })
+    const accounts = [...this.getAccountsRaw(), empty]
+    this.setAccountsRaw(accounts)
+    this.setActiveAccountIdRaw(empty.id)
+    return empty
+  }
+
+  private migrateLegacySingleAccount(): void {
+    const accounts = this.getAccountsRaw()
+    if (accounts.length > 0) return
+
+    const dbPath = String(this.getStoredValue('dbPath') || '').trim()
+    const decryptKey = String(this.getStoredValue('decryptKey') || '').trim()
+    const wxid = String(this.getStoredValue('myWxid') || '').trim()
+    const cachePath = String(this.getStoredValue('cachePath') || '').trim()
+    const imageXorKey = String(this.getStoredValue('imageXorKey') || '').trim()
+    const imageAesKey = String(this.getStoredValue('imageAesKey') || '').trim()
+
+    if (!dbPath && !decryptKey && !wxid && !cachePath && !imageXorKey && !imageAesKey) {
+      return
+    }
+
+    const now = Date.now()
+    const migrated = this.normalizeAccountProfile({
+      id: this.createAccountId(),
+      wxid,
+      dbPath,
+      decryptKey,
+      cachePath,
+      imageXorKey,
+      imageAesKey,
+      displayName: wxid || '未命名账号',
+      createdAt: now,
+      updatedAt: now,
+      lastUsedAt: now
+    })
+
+    this.setAccountsRaw([migrated])
+    this.setActiveAccountIdRaw(migrated.id)
+  }
+
+  listAccounts(): AccountProfile[] {
+    return this.getAccountsRaw()
+      .sort((a, b) => (b.lastUsedAt || 0) - (a.lastUsedAt || 0) || a.displayName.localeCompare(b.displayName))
+  }
+
+  getActiveAccount(): AccountProfile | null {
+    const accounts = this.getAccountsRaw()
+    if (accounts.length === 0) return null
+
+    const activeId = this.getActiveAccountIdRaw()
+    const active = accounts.find((item) => item.id === activeId)
+    return active || accounts[0]
+  }
+
+  setActiveAccount(accountId: string): AccountProfile | null {
+    const accounts = this.getAccountsRaw()
+    const target = accounts.find((item) => item.id === accountId)
+    if (!target) return null
+
+    const now = Date.now()
+    const nextAccounts = accounts.map((item) => (
+      item.id === accountId ? { ...item, lastUsedAt: now, updatedAt: now } : item
+    ))
+    this.setAccountsRaw(nextAccounts)
+    this.setActiveAccountIdRaw(accountId)
+    return nextAccounts.find((item) => item.id === accountId) || null
+  }
+
+  saveAccount(profile: AccountProfileInput): AccountProfile {
+    const accounts = this.getAccountsRaw()
+    const now = Date.now()
+    const normalized = this.normalizeAccountInput(profile)
+    const duplicate = accounts.find((item) => item.wxid === normalized.wxid && item.dbPath === normalized.dbPath)
+
+    if (duplicate) {
+      const updated: AccountProfile = {
+        ...duplicate,
+        ...normalized,
+        updatedAt: now,
+        lastUsedAt: duplicate.lastUsedAt || now
+      }
+      const nextAccounts = accounts.map((item) => item.id === duplicate.id ? updated : item)
+      this.setAccountsRaw(nextAccounts)
+      return updated
+    }
+
+    const created: AccountProfile = {
+      id: this.createAccountId(),
+      ...normalized,
+      createdAt: now,
+      updatedAt: now,
+      lastUsedAt: now
+    }
+    this.setAccountsRaw([...accounts, created])
+    if (!this.getActiveAccountIdRaw()) {
+      this.setActiveAccountIdRaw(created.id)
+    }
+    return created
+  }
+
+  updateAccount(accountId: string, patch: AccountProfilePatch): AccountProfile | null {
+    const accounts = this.getAccountsRaw()
+    const current = accounts.find((item) => item.id === accountId)
+    if (!current) return null
+
+    const normalized = this.normalizeAccountInput(patch, current)
+    const next: AccountProfile = {
+      ...current,
+      ...normalized,
+      updatedAt: Date.now()
+    }
+    const nextAccounts = accounts.map((item) => item.id === accountId ? next : item)
+    this.setAccountsRaw(nextAccounts)
+    return next
+  }
+
+  deleteAccount(accountId: string): { deleted: AccountProfile | null; nextActiveAccountId: string } {
+    const accounts = this.getAccountsRaw()
+    const deleted = accounts.find((item) => item.id === accountId) || null
+    if (!deleted) {
+      return { deleted: null, nextActiveAccountId: this.getActiveAccountIdRaw() }
+    }
+
+    const remaining = accounts.filter((item) => item.id !== accountId)
+    this.setAccountsRaw(remaining)
+
+    let nextActiveAccountId = this.getActiveAccountIdRaw()
+    if (nextActiveAccountId === accountId) {
+      nextActiveAccountId = remaining[0]?.id || ''
+      this.setActiveAccountIdRaw(nextActiveAccountId)
+    }
+
+    if (remaining.length === 0) {
+      this.setActiveAccountIdRaw('')
+    }
+
+    return { deleted, nextActiveAccountId }
+  }
+
+  clearCurrentAccount(): AccountProfile | null {
+    const active = this.getActiveAccount()
+    if (!active) return null
+    const next = this.updateAccount(active.id, {
+      wxid: '',
+      dbPath: '',
+      decryptKey: '',
+      cachePath: '',
+      imageXorKey: '',
+      imageAesKey: '',
+      displayName: '未命名账号'
+    })
+    return next
+  }
+
+  clearAllAccountsAndAccountConfig(): void {
+    this.setAccountsRaw([])
+    this.setActiveAccountIdRaw('')
+    for (const key of ACCOUNT_CONFIG_CLEAR_KEYS) {
+      this.setStoredValue(key, '' as any)
+    }
+  }
+
   get<K extends keyof ConfigSchema>(key: K): ConfigSchema[K] {
     try {
-      if (!this.db) {
-        return defaults[key]
+      if (ACCOUNT_FIELD_KEYS.has(key as string)) {
+        const active = this.getActiveAccount()
+        return this.getAccountFieldValue(active, key)
       }
-      const row = this.db.prepare('SELECT value FROM config WHERE key = ?').get(key) as { value: string } | undefined
-      if (row) {
-        return JSON.parse(row.value)
-      }
-      return defaults[key]
+
+      return this.getStoredValue(key)
     } catch (e) {
       console.error(`获取配置 ${key} 失败:`, e)
       return defaults[key]
@@ -279,10 +598,18 @@ export class ConfigService {
 
   set<K extends keyof ConfigSchema>(key: K, value: ConfigSchema[K]): void {
     try {
-      if (!this.db) return
-      this.db.prepare(`
-        INSERT OR REPLACE INTO config (key, value) VALUES (?, ?)
-      `).run(key, JSON.stringify(value))
+      if (ACCOUNT_FIELD_KEYS.has(key as string)) {
+        const active = this.ensureActiveAccount()
+        const updated = this.setAccountField(active, key, value)
+        const accounts = this.getAccountsRaw().map((item) => item.id === active.id ? updated : item)
+        this.setAccountsRaw(accounts)
+        if (!this.getActiveAccountIdRaw()) {
+          this.setActiveAccountIdRaw(updated.id)
+        }
+        return
+      }
+
+      this.setStoredValue(key, value)
     } catch (e) {
       console.error(`设置配置 ${key} 失败:`, e)
     }
@@ -299,6 +626,15 @@ export class ConfigService {
         if (row.key in defaults) {
           (result as any)[row.key] = JSON.parse(row.value)
         }
+      }
+      const active = this.getActiveAccount()
+      if (active) {
+        result.dbPath = active.dbPath
+        result.decryptKey = active.decryptKey
+        result.myWxid = active.wxid
+        result.cachePath = active.cachePath
+        result.imageXorKey = active.imageXorKey
+        result.imageAesKey = active.imageAesKey
       }
       return result
     } catch (e) {

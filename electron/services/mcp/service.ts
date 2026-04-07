@@ -10,6 +10,7 @@ import type {
   McpExportChatPayload,
   McpGlobalStatisticsPayload,
   McpHealthPayload,
+  McpMomentsTimelinePayload,
   McpMessagesPayload,
   McpResolveSessionPayload,
   McpStreamEvent,
@@ -265,6 +266,10 @@ export class McpReadService {
 
   async getStatus(): Promise<McpStatusPayload> {
     return this.callProxy<McpStatusPayload>('get_status')
+  }
+
+  async getMomentsTimeline(rawArgs: Record<string, unknown>): Promise<McpMomentsTimelinePayload> {
+    return this.callProxy<McpMomentsTimelinePayload>('get_moments_timeline', rawArgs)
   }
 
   async resolveSession(rawArgs: Record<string, unknown>): Promise<McpResolveSessionPayload> {

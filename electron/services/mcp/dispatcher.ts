@@ -23,6 +23,10 @@ export async function executeMcpTool(
       const payload = getMcpStatusPayload()
       return { summary: 'CipherTalk MCP status loaded.', payload }
     }
+    case 'get_moments_timeline': {
+      const payload = await readService.getMomentsTimeline(args as any)
+      return { summary: `Loaded ${payload.items.length} moments posts.`, payload }
+    }
     case 'resolve_session': {
       const payload = await readService.resolveSession(args as any, reporter)
       return {
