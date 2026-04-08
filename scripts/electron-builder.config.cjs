@@ -3,6 +3,15 @@ const pkg = require('../package.json')
 const target = process.env.CIPHERTALK_BUILD_TARGET
 const base = pkg.build || {}
 
+function appendUnique(items = [], extras = []) {
+  return [...new Set([...(items || []), ...extras])]
+}
+
+function withoutItems(items = [], values = []) {
+  const blacklist = new Set(values)
+  return (items || []).filter(item => !blacklist.has(item))
+}
+
 function getExtraResources(buildTarget) {
   const common = [
     {
@@ -70,8 +79,43 @@ function getExtraFiles(buildTarget) {
   return []
 }
 
+function getFiles(buildTarget) {
+  const baseFiles = Array.isArray(base.files) ? [...base.files] : []
+  const commonFiles = [
+    '!node_modules/.vite/**/*'
+  ]
+
+  if (buildTarget === 'win') {
+    return appendUnique(
+      withoutItems(baseFiles, ['node_modules/koffi/build/**/*']),
+      [
+        ...commonFiles,
+        '!node_modules/onnxruntime-node/bin/**/win32/arm64/**/*',
+        'node_modules/koffi/build/koffi/win32_x64/**/*'
+      ]
+    )
+  }
+
+  return appendUnique(baseFiles, commonFiles)
+}
+
+function getAsarUnpack(buildTarget) {
+  const baseAsarUnpack = Array.isArray(base.asarUnpack) ? [...base.asarUnpack] : []
+
+  if (buildTarget === 'win') {
+    return appendUnique(
+      withoutItems(baseAsarUnpack, ['node_modules/koffi/**/*']),
+      ['node_modules/koffi/build/koffi/win32_x64/**/*']
+    )
+  }
+
+  return baseAsarUnpack
+}
+
 module.exports = {
   ...base,
+  files: getFiles(target),
+  asarUnpack: getAsarUnpack(target),
   extraResources: getExtraResources(target),
   extraFiles: getExtraFiles(target)
 }

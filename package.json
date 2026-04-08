@@ -194,6 +194,7 @@
       "!node_modules/**/test/**/*",
       "!node_modules/**/docs/**/*",
       "!node_modules/**/examples/**/*",
+      "!node_modules/.vite/**/*",
       "!node_modules/**/{linux,darwin,mac,android,ios,armhf,armv7l,ia32,wasm}/**/*",
       "!node_modules/**/*.so",
       "!node_modules/**/*.dylib",
