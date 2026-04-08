@@ -462,7 +462,7 @@ function createChatWindow() {
     titleBarOverlay: {
       color: '#00000000',
       symbolColor: '#666666',
-      height: 32
+      height: 40
     },
     show: false,
     backgroundColor: isDark ? '#1A1A1A' : '#F0F0F0'
@@ -537,7 +537,7 @@ function createGroupAnalyticsWindow() {
     titleBarOverlay: {
       color: '#00000000',
       symbolColor: '#666666',
-      height: 32
+      height: 40
     },
     show: false,
     backgroundColor: isDark ? '#1A1A1A' : '#F0F0F0'
@@ -615,7 +615,7 @@ function createMomentsWindow(filterUsername?: string) {
     titleBarOverlay: {
       color: '#00000000',
       symbolColor: '#666666',
-      height: 32
+      height: 40
     },
     show: false,
     backgroundColor: isDark ? '#1A1A1A' : '#F0F0F0'
@@ -704,7 +704,7 @@ function createChatHistoryWindow(sessionId: string, messageId: number) {
     titleBarOverlay: {
       color: '#00000000',
       symbolColor: isDark ? '#ffffff' : '#1a1a1a',
-      height: 32
+      height: 40
     },
     show: false,
     backgroundColor: isDark ? '#1A1A1A' : '#F0F0F0',
@@ -770,7 +770,7 @@ function createAnnualReportWindow(year: number) {
     titleBarOverlay: {
       color: '#00000000',
       symbolColor: isDark ? '#FFFFFF' : '#333333',
-      height: 32
+      height: 40
     },
     show: false,
     backgroundColor: isDark ? '#1A1A1A' : '#F9F8F6'
@@ -842,7 +842,7 @@ function createAgreementWindow() {
     titleBarOverlay: {
       color: '#00000000',
       symbolColor: isDark ? '#FFFFFF' : '#333333',
-      height: 32
+      height: 40
     },
     show: false,
     backgroundColor: isDark ? '#1A1A1A' : '#FFFFFF'
@@ -993,7 +993,7 @@ function createImageViewerWindow(
     titleBarOverlay: {
       color: '#00000000',
       symbolColor: '#ffffff',
-      height: 32
+      height: 40
     },
     show: false,
     backgroundColor: '#000000',

@@ -1535,9 +1535,10 @@ document.querySelectorAll('.vi video').forEach(function(v) {
     <div className="moments-window">
       <TitleBar
         title="朋友圈"
+        variant="standalone"
         rightContent={
           <div className="title-actions">
-            <button className="export-btn" onClick={() => setShowExportOptions(true)}>
+            <button className="export-btn" onClick={() => setShowExportOptions(true)} data-tooltip="导出">
               <FileDown size={14} />
               <span>导出</span>
             </button>

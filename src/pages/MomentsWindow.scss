@@ -1241,7 +1241,9 @@
 .title-actions {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--window-toolbar-gap);
+  min-width: 0;
+  max-width: 100%;
 
   .export-btn {
     display: flex;
@@ -1264,6 +1266,7 @@
     line-height: 1;
     cursor: pointer;
     transition: all 0.3s cubic-bezier(0.25, 1.5, 0.5, 1);
+    flex-shrink: 0;
 
     &:hover {
       background: linear-gradient(135deg, rgba(var(--primary-rgb), 0.25) 0%, rgba(var(--primary-rgb), 0.1) 100%);
@@ -1295,6 +1298,7 @@
     align-items: center;
     justify-content: center;
     position: relative;
+    flex-shrink: 0;
 
     &:hover {
       background: var(--hover-bg);
@@ -1330,6 +1334,29 @@
         transform: translateX(-50%) translateY(0);
       }
     }
+  }
+}
+
+html[data-window-platform="darwin"] .moments-window .title-actions {
+  gap: 6px;
+}
+
+@media (max-width: 1180px) {
+  html[data-window-platform="darwin"] .moments-window .title-actions .divider {
+    display: none;
+  }
+}
+
+@media (max-width: 1040px) {
+  html[data-window-platform="darwin"] .moments-window .title-actions .export-btn {
+    width: 30px;
+    padding: 6px;
+    gap: 0;
+    justify-content: center;
+  }
+
+  html[data-window-platform="darwin"] .moments-window .title-actions .export-btn span {
+    display: none;
   }
 }
 

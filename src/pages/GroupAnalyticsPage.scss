@@ -13,7 +13,7 @@
       -webkit-app-region: no-drag;
 
       .sidebar-header {
-        padding-top: 38px;
+        padding-top: calc(var(--window-chrome-height) + 6px);
         padding-bottom: 12px;
         padding-left: 16px;
         padding-right: 16px;
@@ -428,7 +428,7 @@
     align-items: center;
     gap: 12px;
     padding: 0 24px;
-    padding-top: 38px;
+    padding-top: calc(var(--window-chrome-height) + 6px);
     padding-bottom: 12px;
     background: var(--card-bg);
     border-bottom: 1px solid var(--border-color);

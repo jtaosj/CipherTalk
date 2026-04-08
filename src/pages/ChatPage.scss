@@ -18,7 +18,7 @@
       backdrop-filter: blur(20px);
 
       .session-header {
-        padding-top: 38px;
+        padding-top: calc(var(--window-chrome-height) + 6px);
         padding-bottom: 12px;
         padding-left: 16px;
         padding-right: 16px;
@@ -248,7 +248,7 @@
       .message-header {
         height: auto;
         padding: 0 24px;
-        padding-top: 38px;
+        padding-top: calc(var(--window-chrome-height) + 6px);
         padding-bottom: 12px;
         background: var(--card-bg);
         border-bottom: 1px solid var(--border-color);

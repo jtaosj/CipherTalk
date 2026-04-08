@@ -3,10 +3,12 @@ import { Copy, Download, RefreshCw, Loader2, Send, ArrowLeft, Trash2, LoaderPinw
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
 import { TIME_RANGE_OPTIONS, type SummaryResult } from '../types/ai'
+import { usePlatformInfo } from '../hooks/usePlatformInfo'
 import AIProviderLogo from '../components/ai/AIProviderLogo'
 import './AISummaryWindow.scss'
 
 function AISummaryWindow() {
+  const { isMac } = usePlatformInfo()
   const [sessionId, setSessionId] = useState<string>('')
   const [sessionName, setSessionName] = useState<string>('')
   const [avatarUrl, setAvatarUrl] = useState<string>('')
@@ -363,33 +365,37 @@ function AISummaryWindow() {
   }
 
   return (
-    <div className="ai-summary-window">
+    <div className={`ai-summary-window ${isMac ? 'is-mac' : 'is-win'}`}>
       {/* 自定义标题栏 */}
       <div className="title-bar">
-        <div className="title-content">
-          {avatarUrl && (
-            <img src={avatarUrl} alt="" className="session-avatar" />
+        {isMac && <div className="title-bar-leading-spacer" aria-hidden="true" />}
+
+        <div className="title-bar-center">
+          <div className="title-content">
+            {avatarUrl && (
+              <img src={avatarUrl} alt="" className="session-avatar" />
+            )}
+            {aiProviderInfo && (
+              <>
+                <span className="multiply-symbol">×</span>
+                <div className="ai-provider-badge">
+                  <AIProviderLogo
+                    providerId={aiProviderInfo.id}
+                    logo={aiProviderInfo.logo}
+                    alt={aiProviderInfo.displayName}
+                    className="ai-provider-logo"
+                    size={24}
+                  />
+                </div>
+              </>
+            )}
+            <span className="session-name">{sessionName}</span>
+          </div>
+
+          {result && (
+            <span className="message-count">{result.messageCount}条</span>
           )}
-          {aiProviderInfo && (
-            <>
-              <span className="multiply-symbol">×</span>
-              <div className="ai-provider-badge">
-                <AIProviderLogo
-                  providerId={aiProviderInfo.id}
-                  logo={aiProviderInfo.logo}
-                  alt={aiProviderInfo.displayName}
-                  className="ai-provider-logo"
-                  size={24}
-                />
-              </div>
-            </>
-          )}
-          <span className="session-name">{sessionName}</span>
         </div>
-        
-        {result && (
-          <span className="message-count">{result.messageCount}条</span>
-        )}
 
         <div className="title-actions">
           {isGenerating && (

@@ -1,18 +1,39 @@
 .title-bar {
-  height: 41px;
   background: var(--bg-secondary);
-  display: grid;
-  grid-template-columns: minmax(140px, 1fr) auto minmax(140px, 1fr);
-  align-items: center;
-  padding-left: 16px;
-  padding-right: 144px; // 为窗口控件留空间
   border-bottom: 1px solid var(--border-color);
   -webkit-app-region: drag;
   flex-shrink: 0;
+  user-select: none;
 
-  &.is-mac {
+  &.variant-app {
+    height: 41px;
+    display: grid;
+    grid-template-columns: minmax(140px, 1fr) auto minmax(140px, 1fr);
+    align-items: center;
+    padding-left: 16px;
+    padding-right: 144px; // 为窗口控件留空间
+  }
+
+  &.variant-app.is-mac {
     padding-left: 84px;
     padding-right: 16px;
+  }
+
+  &.variant-standalone {
+    height: var(--window-chrome-height);
+    min-height: var(--window-chrome-height);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--window-toolbar-gap);
+    padding-left: 16px;
+    padding-right: var(--window-controls-right-safe);
+  }
+
+  &.variant-standalone.is-mac {
+    display: grid;
+    grid-template-columns: minmax(calc(var(--window-controls-left-safe) - 16px), 1fr) auto minmax(0, 1fr);
+    padding-right: var(--window-controls-right-safe);
   }
 }
 
@@ -36,7 +57,8 @@
 }
 
 .title-bar-traffic-spacer {
-  width: 68px;
+  width: calc(var(--window-controls-left-safe) - 16px);
+  min-width: 68px;
   height: 12px;
   flex-shrink: 0;
 }
@@ -78,7 +100,7 @@
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  gap: 10px;
+  gap: var(--window-toolbar-gap);
   min-width: 0;
   -webkit-app-region: no-drag;
 }
@@ -99,6 +121,23 @@
   max-width: 600px;
 }
 
+.title-bar.variant-standalone.is-win {
+  .title-bar-left {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .title-bar-right {
+    flex-shrink: 0;
+    max-width: min(56vw, 520px);
+    overflow: hidden;
+  }
+
+  .titles {
+    max-width: min(46vw, 420px);
+  }
+}
+
 .title-bar.is-mac {
   .title-bar-left {
     justify-content: flex-start;
@@ -114,6 +153,11 @@
   }
 }
 
+.title-bar.variant-standalone.is-mac {
+  .title-bar-center .titles {
+    max-width: 320px;
+  }
+}
 
 // 导出页面标签切换
 .export-tabs {
@@ -125,15 +169,23 @@
 }
 
 @media (max-width: 960px) {
-  .title-bar {
+  .title-bar.variant-app {
     grid-template-columns: minmax(90px, 1fr) auto minmax(90px, 1fr);
   }
 
-  .title-bar.is-mac {
+  .title-bar.variant-app.is-mac {
     padding-left: 76px;
   }
 
-  .title-bar.is-mac .title-bar-center .titles {
+  .title-bar.variant-app.is-mac .title-bar-center .titles {
+    max-width: 220px;
+  }
+
+  .title-bar.variant-standalone.is-win .titles {
+    max-width: 240px;
+  }
+
+  .title-bar.variant-standalone.is-mac .title-bar-center .titles {
     max-width: 220px;
   }
 

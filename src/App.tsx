@@ -36,6 +36,7 @@ import { initTldList } from './utils/linkify'
 import LockScreen from './pages/LockScreen'
 import { useAuthStore } from './stores/authStore'
 import { X, Shield, Loader2 } from 'lucide-react'
+import { applyWindowChromeToDocument } from './utils/windowChrome'
 import './App.scss'
 
 type AppUpdateInfo = {
@@ -118,6 +119,25 @@ function App() {
     // 初始化认证状态
     initAuth()
   }, [loadTheme])
+
+  useEffect(() => {
+    let cancelled = false
+
+    const applyPlatformChrome = (platform?: string) => {
+      if (cancelled) return
+      applyWindowChromeToDocument(platform)
+    }
+
+    void window.electronAPI.app.getPlatformInfo().then((info) => {
+      applyPlatformChrome(info.platform)
+    }).catch(() => {
+      applyPlatformChrome('win32')
+    })
+
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   // 应用主题
   useEffect(() => {

@@ -1,10 +1,14 @@
 import './AgreementPage.scss'
 import * as configService from '../services/config'
+import { usePlatformInfo } from '../hooks/usePlatformInfo'
 
 function AgreementPage() {
+  const { isMac } = usePlatformInfo()
+
   return (
     <div className="agreement-page">
-      <div className="agreement-titlebar">
+      <div className={`agreement-titlebar ${isMac ? 'is-mac' : 'is-win'}`}>
+        {isMac && <div className="agreement-titlebar-spacer" aria-hidden="true" />}
         <span>用户协议与隐私政策</span>
       </div>
       <div className="agreement-content">
