@@ -2,6 +2,7 @@ import type { ChatSession, Message, Contact, ContactInfo } from './models'
 import type { SummaryResult } from './ai'
 import type { AccountProfile } from './account'
 
+
 export interface ImageListItem {
   imagePath: string
   liveVideoPath?: string
@@ -66,6 +67,9 @@ export interface ElectronAPI {
     update: (accountId: string, patch: Partial<Omit<AccountProfile, 'id' | 'createdAt' | 'updatedAt' | 'lastUsedAt'>>) => Promise<AccountProfile | null>
     delete: (accountId: string, deleteLocalData?: boolean) => Promise<{ success: boolean; error?: string; deleted?: AccountProfile | null; nextActiveAccountId?: string }>
   }
+  skillInstaller: {
+    exportSkillZip: (skillName: string) => Promise<{ success: boolean; outputPath?: string; fileName?: string; version?: string; error?: string }>
+  }
   db: {
     open: (dbPath: string, key?: string) => Promise<boolean>
     query: <T = unknown>(sql: string, params?: unknown[]) => Promise<T[]>
@@ -82,6 +86,7 @@ export interface ElectronAPI {
   file: {
     delete: (filePath: string) => Promise<{ success: boolean; error?: string }>
     copy: (sourcePath: string, destPath: string) => Promise<{ success: boolean; error?: string }>
+    writeBase64: (filePath: string, base64Data: string) => Promise<{ success: boolean; error?: string }>
   }
   shell: {
     openPath: (path: string) => Promise<string>
@@ -884,6 +889,17 @@ export interface ElectronAPI {
       success: boolean
       transcript?: string
       cached?: boolean
+      error?: string
+    }>
+    testOnlineConfig: (overrides?: {
+      provider?: 'openai-compatible' | 'aliyun-qwen-asr' | 'custom'
+      apiKey?: string
+      baseURL?: string
+      model?: string
+      language?: string
+      timeoutMs?: number
+    }) => Promise<{
+      success: boolean
       error?: string
     }>
     onDownloadProgress: (callback: (progress: {

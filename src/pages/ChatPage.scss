@@ -1373,6 +1373,14 @@
   .spin {
     animation: spin 1s linear infinite;
   }
+
+  .stt-provider-loading-icon {
+    display: block;
+    flex-shrink: 0;
+    width: 18px;
+    height: 18px;
+    animation: sttIconPulse 1.4s ease-in-out infinite;
+  }
 }
 
 .emoji-unavailable {
@@ -3501,7 +3509,7 @@ video::-webkit-media-controls-fullscreen-button {
 // 复制成功提示
 .copy-toast {
   position: fixed;
-  bottom: 80px;
+  top: 80px;
   left: 50%;
   transform: translateX(-50%);
   background: var(--card-bg);
@@ -3523,9 +3531,35 @@ video::-webkit-media-controls-fullscreen-button {
   }
 }
 
+@keyframes sttIconPulse {
+  0%, 100% {
+    transform: scale(1);
+    opacity: 0.75;
+  }
+
+  50% {
+    transform: scale(1.12);
+    opacity: 1;
+  }
+}
+
+.copy-toast.top-toast.success {
+  border-color: rgba(16, 185, 129, 0.28);
+  box-shadow: 0 8px 24px rgba(16, 185, 129, 0.18);
+}
+
+.copy-toast.top-toast.error {
+  border-color: rgba(239, 68, 68, 0.28);
+  box-shadow: 0 8px 24px rgba(239, 68, 68, 0.18);
+
+  svg {
+    color: var(--danger, #ef4444);
+  }
+}
+
 @keyframes slideUpToast {
   from {
-    transform: translateX(-50%) translateY(20px);
+    transform: translateX(-50%) translateY(-20px);
     opacity: 0;
   }
 
@@ -3599,6 +3633,18 @@ video::-webkit-media-controls-fullscreen-button {
   max-width: 100%;
   word-wrap: break-word;
   animation: fadeIn 0.3s ease;
+
+  .stt-provider-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    line-height: 1;
+
+    img {
+      display: block;
+    }
+  }
 }
 
 // 发送方的样式调整

@@ -25,7 +25,6 @@
 .welcome-page.is-standalone .window-controls {
   position: absolute;
   top: 12px;
-  left: 18px;
   display: inline-flex;
   gap: 8px;
   padding: 6px;
@@ -35,6 +34,14 @@
   backdrop-filter: blur(10px);
   z-index: 3;
   -webkit-app-region: no-drag;
+}
+
+.welcome-page.is-standalone.is-mac .window-controls {
+  left: 18px;
+}
+
+.welcome-page.is-standalone.is-windows .window-controls {
+  right: 18px;
 }
 
 .welcome-page.is-standalone .window-btn {

@@ -80,6 +80,44 @@ Battle report:
 
 - “战报：关键词不稳，先撒网再回收。”
 
+### 5. Tool readiness is uncertain
+
+Example:
+
+- “怎么什么都查不到”
+- “MCP 是不是没连上”
+
+Use this order:
+
+1. `health_check`
+2. `get_status`
+3. Read `config.dbReady`
+4. Read `warnings`
+5. Only then decide whether to continue with session/message tools
+
+Battle report:
+
+- “战报：先查活性和就绪状态，避免盲查空库。” 
+
+### 6. User actually means朋友圈，不是聊天消息
+
+Example:
+
+- “查下他朋友圈最近发了什么”
+- “看下谁给这条朋友圈点过赞”
+
+Use this order:
+
+1. `get_moments_timeline`
+2. Add `usernames` when poster is known
+3. Add `keyword` when caption clue exists
+4. Add `startTime/endTime` when period clue exists
+5. Keep `includeRaw=false` unless debugging parser gaps
+
+Battle report:
+
+- “战报：目标是朋友圈，不走聊天消息链路，直接拉时间线。”
+
 ## Candidate comparison checklist
 
 When choosing among multiple sessions, compare:
@@ -111,3 +149,17 @@ When evidence is still weak:
 - say it is not fully locked yet
 - continue querying instead of stopping early
 - say which next tool call is most likely to break the tie
+
+## Status reading checklist
+
+When reading `get_status`, pay attention to:
+
+- `config.dbReady`
+- `config.mcpEnabled`
+- `warnings`
+- `capabilities.tools`
+
+If `dbReady=false`:
+
+- stop escalating to content-heavy tools
+- explain that DB-backed tools may return nothing or fail

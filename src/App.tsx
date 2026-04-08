@@ -295,7 +295,7 @@ function App() {
   // 启动时自动检查配置并连接数据库
   useEffect(() => {
     // 独立窗口不需要自动连接主数据库
-    if (isChatWindow || isGroupAnalyticsWindow || isMomentsWindow || isAnnualReportWindow || isAgreementWindow || isAISummaryWindow || location.pathname === '/image-viewer-window') return
+    if (isChatWindow || isGroupAnalyticsWindow || isMomentsWindow || isAnnualReportWindow || isAgreementWindow || isAISummaryWindow || isWelcomeWindow || location.pathname === '/image-viewer-window') return
 
     const autoConnect = async () => {
       try {
@@ -363,7 +363,7 @@ function App() {
     }
 
     autoConnect()
-  }, [isChatWindow, isGroupAnalyticsWindow])
+  }, [isChatWindow, isGroupAnalyticsWindow, isMomentsWindow, isAnnualReportWindow, isAgreementWindow, isAISummaryWindow, isWelcomeWindow, location.pathname, navigate, setDbConnected])
 
   // 独立聊天窗口 - 只显示聊天页面，无侧边栏
   if (isChatWindow) {

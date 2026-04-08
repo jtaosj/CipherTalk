@@ -202,8 +202,8 @@ function WelcomePage({ standalone = false }: WelcomePageProps) {
   }, [dbPath, cachePath, wxid, decryptKey, imageXorKey, imageAesKey, isAddAccountMode])
 
   const currentStep = steps[stepIndex]
-  const rootClassName = `welcome-page${isClosing ? ' is-closing' : ''}${standalone ? ' is-standalone' : ''}`
   const showWindowControls = standalone
+  const rootClassName = `welcome-page${isClosing ? ' is-closing' : ''}${standalone ? ' is-standalone' : ''}${showWindowControls ? (isMac ? ' is-mac' : ' is-windows') : ''}`
 
   useEffect(() => {
     if (currentStep.id !== 'db') return
@@ -219,6 +219,34 @@ function WelcomePage({ standalone = false }: WelcomePageProps) {
 
   const handleCloseWindow = () => {
     window.electronAPI.window.close()
+  }
+
+  const renderWindowControls = () => {
+    if (!showWindowControls) return null
+
+    return (
+      <div className="window-controls">
+        {isMac ? (
+          <>
+            <button type="button" className="window-btn is-close" onClick={handleCloseWindow} aria-label="关闭">
+              <X size={14} />
+            </button>
+            <button type="button" className="window-btn" onClick={handleMinimize} aria-label="最小化">
+              <Minus size={14} />
+            </button>
+          </>
+        ) : (
+          <>
+            <button type="button" className="window-btn" onClick={handleMinimize} aria-label="最小化">
+              <Minus size={14} />
+            </button>
+            <button type="button" className="window-btn is-close" onClick={handleCloseWindow} aria-label="关闭">
+              <X size={14} />
+            </button>
+          </>
+        )}
+      </div>
+    )
   }
 
   const handleResetCachePath = async () => {
@@ -654,19 +682,10 @@ function WelcomePage({ standalone = false }: WelcomePageProps) {
     }
   }
 
-  if (isDbConnected) {
+  if (isDbConnected && !isAddAccountMode) {
     return (
       <div className={rootClassName}>
-        {showWindowControls && (
-          <div className="window-controls">
-            <button type="button" className="window-btn" onClick={handleMinimize} aria-label="最小化">
-              <Minus size={14} />
-            </button>
-            <button type="button" className="window-btn is-close" onClick={handleCloseWindow} aria-label="关闭">
-              <X size={14} />
-            </button>
-          </div>
-        )}
+        {renderWindowControls()}
         <div className="welcome-shell">
           <div className="connected-panel">
             <div className="connected-icon">
@@ -697,16 +716,7 @@ function WelcomePage({ standalone = false }: WelcomePageProps) {
 
   return (
     <div className={rootClassName}>
-      {showWindowControls && (
-        <div className="window-controls">
-          <button type="button" className="window-btn is-close" onClick={handleCloseWindow} aria-label="关闭">
-            <X size={14} />
-          </button>
-          <button type="button" className="window-btn" onClick={handleMinimize} aria-label="最小化">
-            <Minus size={14} />
-          </button>
-        </div>
-      )}
+      {renderWindowControls()}
 
       {/* Hook 安装成功气泡提示 */}
       {showHookSuccessToast && (

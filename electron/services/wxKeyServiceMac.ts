@@ -995,7 +995,7 @@ export class WxKeyServiceMac {
           }
 
           const current = chunk.subarray(0, bytesRead)
-          const data = trailing ? Buffer.concat([trailing, current]) : current
+          const data: Buffer = trailing ? Buffer.concat([trailing, current]) : current
           const key = this.searchAsciiKey(data, ciphertext) || this.searchUtf16Key(data, ciphertext) || this.searchAny16Key(data, ciphertext)
           if (key) return key
           trailing = data.subarray(Math.max(0, data.length - OVERLAP))

@@ -10,7 +10,8 @@ import ListItemButton from '@mui/material/ListItemButton'
 import ListItemIcon from '@mui/material/ListItemIcon'
 import Tooltip from '@mui/material/Tooltip'
 import Typography from '@mui/material/Typography'
-import { Home, MessageSquare, BarChart3, Users, FileText, Database, Settings, SquareChevronLeft, SquareChevronRight, Download, Aperture, Network, Boxes } from 'lucide-react'
+import { Home, MessageSquare, BarChart3, Users, FileText, Database, Settings, SquareChevronLeft, SquareChevronRight, Download, Aperture, Network } from 'lucide-react'
+import { MCP } from '@lobehub/icons'
 import { useAppStore } from '../stores/appStore'
 
 const DRAWER_WIDTH = 220
@@ -82,7 +83,7 @@ function Sidebar() {
     { key: 'export', label: '导出数据', icon: <Download size={20} />, type: 'route', path: '/export' },
     { key: 'data-management', label: '数据管理', icon: <Database size={20} />, type: 'route', path: '/data-management' },
     { key: 'open-api', label: '开放接口', icon: <Network size={20} />, type: 'route', path: '/open-api' },
-    { key: 'mcp', label: 'MCP 服务', icon: <Boxes size={20} />, type: 'route', path: '/mcp' },
+    { key: 'mcp', label: 'MCP 服务', icon: <MCP size={20} />, type: 'route', path: '/mcp' },
   ]
 
   const navItemSx = {

@@ -26,12 +26,14 @@ import { videoService } from './services/videoService'
 
 import { voiceTranscribeService } from './services/voiceTranscribeService'
 import { voiceTranscribeServiceWhisper } from './services/voiceTranscribeServiceWhisper'
+import { voiceTranscribeServiceOnline } from './services/voiceTranscribeServiceOnline'
 import { systemAuthService } from './services/systemAuthService'
 import { shortcutService } from './services/shortcutService'
 import { httpApiService } from './services/httpApiService'
 import { getBestCachePath, getRuntimePlatformInfo } from './services/platformService'
 import { getMcpLaunchConfig as getMcpLaunchConfigForUi, getMcpProxyConfig } from './services/mcp/runtime'
 import { mcpProxyService } from './services/mcp/proxyService'
+import { skillInstallerService } from './services/skillInstallerService'
 
 type AppWithQuitFlag = typeof app & {
   isQuitting?: boolean
@@ -1337,6 +1339,10 @@ function registerIpcHandlers() {
     return { success: true, deleted: result.deleted, nextActiveAccountId: result.nextActiveAccountId }
   })
 
+  ipcMain.handle('skillInstaller:exportSkillZip', async (_, skillName: string) => {
+    return skillInstallerService.exportSkillZip(skillName)
+  })
+
   // HTTP API 管理
   ipcMain.handle('httpApi:getStatus', async () => {
     return { success: true, status: httpApiService.getUiStatus() }
@@ -1439,6 +1445,16 @@ function registerIpcHandlers() {
         return { success: false, error: '源文件不存在' }
       }
       fs.copyFileSync(sourcePath, destPath)
+      return { success: true }
+    } catch (error: any) {
+      return { success: false, error: error.message }
+    }
+  })
+
+  ipcMain.handle('file:writeBase64', async (_, filePath: string, base64Data: string) => {
+    try {
+      const fs = await import('fs')
+      fs.writeFileSync(filePath, Buffer.from(base64Data, 'base64'))
       return { success: true }
     } catch (error: any) {
       return { success: false, error: error.message }
@@ -3343,6 +3359,11 @@ function registerIpcHandlers() {
           whisperModelType as any,
           'auto' // 自动识别语言
         )
+      } else if (sttMode === 'online') {
+        console.log('[Main] 使用在线 STT 模式')
+        result = await voiceTranscribeServiceOnline.transcribeWavBuffer(wavData, (text) => {
+          win?.webContents.send('stt:partialResult', text)
+        })
       } else {
         // 使用 SenseVoice CPU 模式
         console.log('[Main] 使用 SenseVoice CPU 模式')
@@ -3378,6 +3399,21 @@ function registerIpcHandlers() {
     try {
       voiceTranscribeService.saveTranscriptCache(sessionId, createTime, transcript)
       return { success: true }
+    } catch (e) {
+      return { success: false, error: String(e) }
+    }
+  })
+
+  ipcMain.handle('stt-online:test-config', async (_, overrides?: {
+    provider?: 'openai-compatible' | 'aliyun-qwen-asr' | 'custom'
+    apiKey?: string
+    baseURL?: string
+    model?: string
+    language?: string
+    timeoutMs?: number
+  }) => {
+    try {
+      return await voiceTranscribeServiceOnline.testConfig(overrides)
     } catch (e) {
       return { success: false, error: String(e) }
     }

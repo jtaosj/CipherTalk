@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useSearchParams, useLocation } from 'react-router-dom'
 import { useAppStore } from '../stores/appStore'
 import { useThemeStore, themes } from '../stores/themeStore'
@@ -12,7 +12,7 @@ import {
   Eye, EyeOff, Key, FolderSearch, FolderOpen, Search,
   RotateCcw, Trash2, Save, Plug, X, Check, Sun, Moon, Monitor,
   Palette, Database, ImageIcon, Download, HardDrive, Info, RefreshCw, Shield, Clock, CheckCircle, AlertCircle, Mic,
-  Zap, Layers, User, Sparkles, Github, Fingerprint, Lock, ShieldCheck, Minus, Plus, Smile
+  Zap, Layers, User, Sparkles, Github, Fingerprint, Lock, ShieldCheck, Minus, Plus, Smile, ChevronDown
 } from 'lucide-react'
 import { useAuthStore } from '../stores/authStore'
 import './SettingsPage.scss'
@@ -43,10 +43,40 @@ const sttModelTypeOptions = [
   { value: 'float32', label: 'float32 完整版', size: '920 MB', desc: '更高精度，体积较大' }
 ]
 
+const sttOnlineLanguageOptions = [
+  { value: 'auto', label: '自动识别' },
+  { value: 'zh', label: '中文' },
+  { value: 'en', label: '英语' },
+  { value: 'ja', label: '日语' },
+  { value: 'ko', label: '韩语' },
+  { value: 'yue', label: '粤语' }
+]
+
+const sttOnlineProviderOptions = [
+  { value: 'openai-compatible', label: 'OpenAI 兼容' },
+  { value: 'aliyun-qwen-asr', label: '阿里云 Qwen-ASR' },
+  { value: 'custom', label: '自定义接口' }
+] as const
+
+const STT_ONLINE_DEFAULTS = {
+  'openai-compatible': {
+    baseURL: 'https://api.openai.com/v1',
+    model: 'gpt-4o-mini-transcribe'
+  },
+  'aliyun-qwen-asr': {
+    baseURL: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+    model: 'qwen3-asr-flash'
+  },
+  custom: {
+    baseURL: '',
+    model: ''
+  }
+} as const
+
 function SettingsPage() {
   const [searchParams] = useSearchParams()
   const location = useLocation()
-  const { setDbConnected, setLoading, setMyWxid: setCurrentWxid } = useAppStore()
+  const { setDbConnected, setLoading, setMyWxid: setCurrentWxid, userInfo } = useAppStore()
   const { currentTheme, themeMode, setTheme, setThemeMode, appIcon, setAppIcon } = useThemeStore()
   const { status: activationStatus, checkStatus: checkActivationStatus } = useActivationStore()
 
@@ -161,6 +191,15 @@ function SettingsPage() {
   const [isLoadingCacheSize, setIsLoadingCacheSize] = useState(false)
   const [sttLanguages, setSttLanguagesState] = useState<string[]>([])
   const [sttModelType, setSttModelType] = useState<'int8' | 'float32'>('int8')
+  const [sttMode, setSttMode] = useState<'cpu' | 'gpu' | 'online'>('cpu')
+  const [sttOnlineProvider, setSttOnlineProvider] = useState<'openai-compatible' | 'aliyun-qwen-asr' | 'custom'>('openai-compatible')
+  const [sttOnlineApiKey, setSttOnlineApiKey] = useState('')
+  const [sttOnlineBaseURL, setSttOnlineBaseURL] = useState('https://api.openai.com/v1')
+  const [sttOnlineModel, setSttOnlineModel] = useState('gpt-4o-mini-transcribe')
+  const [sttOnlineLanguage, setSttOnlineLanguage] = useState('auto')
+  const [sttOnlineTimeoutMs, setSttOnlineTimeoutMs] = useState(60000)
+  const [sttOnlineMaxConcurrency, setSttOnlineMaxConcurrency] = useState(2)
+  const [showSttOnlineLanguageDropdown, setShowSttOnlineLanguageDropdown] = useState(false)
   const [quoteStyle, setQuoteStyle] = useState<'default' | 'wechat'>('default')
   const [skipIntegrityCheck, setSkipIntegrityCheck] = useState(false)
   const [exportDefaultDateRange, setExportDefaultDateRange] = useState<number>(0)
@@ -198,18 +237,56 @@ function SettingsPage() {
   // 配置变化状态
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false)
   const [initialConfig, setInitialConfig] = useState<any>(null)
+  const sttOnlineLanguageRef = useRef<HTMLDivElement>(null)
   const isMac = platformInfo.platform === 'darwin'
   const biometricLabel = isMac ? 'Touch ID' : 'Windows Hello'
 
-  const buildAccountPayload = () => ({
-    wxid: wxid.trim(),
-    dbPath: dbPath.trim(),
-    decryptKey: decryptKey.trim(),
-    cachePath: cachePath.trim(),
-    imageXorKey: imageXorKey.trim(),
-    imageAesKey: imageAesKey.trim(),
-    displayName: wxid.trim() || '未命名账号'
-  })
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (!sttOnlineLanguageRef.current?.contains(event.target as Node)) {
+        setShowSttOnlineLanguageDropdown(false)
+      }
+    }
+
+    if (showSttOnlineLanguageDropdown) {
+      document.addEventListener('mousedown', handleClickOutside)
+    }
+
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside)
+    }
+  }, [showSttOnlineLanguageDropdown])
+
+  const getAccountDisplayName = (account?: AccountProfile | null) => {
+    if (!account) return '未命名账号'
+
+    const activeNickname = account.id === activeAccountId ? userInfo?.nickName?.trim() : ''
+    if (activeNickname) return activeNickname
+
+    const savedName = account.displayName?.trim()
+    if (savedName && savedName !== '未命名账号') return savedName
+
+    return account.wxid?.trim() || '未命名账号'
+  }
+
+  const buildAccountPayload = () => {
+    const currentAccount = accountsList.find(item => item.id === editingAccountId)
+    const currentDisplayName = currentAccount?.displayName?.trim()
+    const preferredDisplayName = userInfo?.nickName?.trim()
+      || (currentDisplayName && currentDisplayName !== '未命名账号' ? currentDisplayName : '')
+      || wxid.trim()
+      || '未命名账号'
+
+    return {
+      wxid: wxid.trim(),
+      dbPath: dbPath.trim(),
+      decryptKey: decryptKey.trim(),
+      cachePath: cachePath.trim(),
+      imageXorKey: imageXorKey.trim(),
+      imageAesKey: imageAesKey.trim(),
+      displayName: preferredDisplayName
+    }
+  }
 
   const applyAccountToForm = (account: AccountProfile | null) => {
     setEditingAccountId(account?.id || '')
@@ -237,6 +314,26 @@ function SettingsPage() {
   }
 
   useEffect(() => {
+    const syncActiveAccountDisplayName = async () => {
+      const activeNickname = userInfo?.nickName?.trim()
+      if (!activeNickname || !activeAccountId) return
+
+      const activeAccount = accountsList.find(item => item.id === activeAccountId)
+      if (!activeAccount) return
+
+      const savedName = activeAccount.displayName?.trim()
+      if (savedName && savedName !== activeAccount.wxid && savedName !== '未命名账号') return
+
+      const updated = await configService.updateAccount(activeAccount.id, { displayName: activeNickname })
+      if (!updated) return
+
+      await refreshAccountsState(editingAccountId || activeAccount.id)
+    }
+
+    void syncActiveAccountDisplayName()
+  }, [userInfo?.nickName, activeAccountId, accountsList])
+
+  useEffect(() => {
     loadConfig()
     loadDefaultExportPath()
     loadAppVersion()
@@ -259,6 +356,14 @@ function SettingsPage() {
       const savedExportPath = await configService.getExportPath()
       const savedSttLanguages = await configService.getSttLanguages()
       const savedSttModelType = await configService.getSttModelType()
+      const savedSttMode = await configService.getSttMode()
+      const savedSttOnlineProvider = await configService.getSttOnlineProvider()
+      const savedSttOnlineApiKey = await configService.getSttOnlineApiKey()
+      const savedSttOnlineBaseURL = await configService.getSttOnlineBaseURL()
+      const savedSttOnlineModel = await configService.getSttOnlineModel()
+      const savedSttOnlineLanguage = await configService.getSttOnlineLanguage()
+      const savedSttOnlineTimeoutMs = await configService.getSttOnlineTimeoutMs()
+      const savedSttOnlineMaxConcurrency = await configService.getSttOnlineMaxConcurrency()
       const savedSkipIntegrityCheck = await configService.getSkipIntegrityCheck()
       const savedAutoUpdateDatabase = await configService.getAutoUpdateDatabase()
 
@@ -276,6 +381,14 @@ function SettingsPage() {
         setSttLanguagesState(['zh'])
       }
       setSttModelType(savedSttModelType)
+      setSttMode(savedSttMode)
+      setSttOnlineProvider(savedSttOnlineProvider)
+      setSttOnlineApiKey(savedSttOnlineApiKey)
+      setSttOnlineBaseURL(savedSttOnlineBaseURL)
+      setSttOnlineModel(savedSttOnlineModel)
+      setSttOnlineLanguage(savedSttOnlineLanguage)
+      setSttOnlineTimeoutMs(savedSttOnlineTimeoutMs)
+      setSttOnlineMaxConcurrency(savedSttOnlineMaxConcurrency)
       setSkipIntegrityCheck(savedSkipIntegrityCheck)
       setAutoUpdateDatabase(savedAutoUpdateDatabase)
 
@@ -332,6 +445,14 @@ function SettingsPage() {
         exportPath: savedExportPath || '',
         sttLanguages: savedSttLanguages && savedSttLanguages.length > 0 ? savedSttLanguages : ['zh'],
         sttModelType: savedSttModelType,
+        sttMode: savedSttMode,
+        sttOnlineProvider: savedSttOnlineProvider,
+        sttOnlineApiKey: savedSttOnlineApiKey,
+        sttOnlineBaseURL: savedSttOnlineBaseURL,
+        sttOnlineModel: savedSttOnlineModel,
+        sttOnlineLanguage: savedSttOnlineLanguage,
+        sttOnlineTimeoutMs: savedSttOnlineTimeoutMs,
+        sttOnlineMaxConcurrency: savedSttOnlineMaxConcurrency,
         skipIntegrityCheck: savedSkipIntegrityCheck,
         autoUpdateDatabase: savedAutoUpdateDatabase,
         autoUpdateCheckInterval: savedCheckInterval,
@@ -381,6 +502,14 @@ function SettingsPage() {
       exportPath,
       sttLanguages,
       sttModelType,
+      sttMode,
+      sttOnlineProvider,
+      sttOnlineApiKey,
+      sttOnlineBaseURL,
+      sttOnlineModel,
+      sttOnlineLanguage,
+      sttOnlineTimeoutMs,
+      sttOnlineMaxConcurrency,
       skipIntegrityCheck,
       autoUpdateDatabase,
       autoUpdateCheckInterval,
@@ -407,7 +536,8 @@ function SettingsPage() {
     setHasUnsavedChanges(hasChanges)
   }, [
     decryptKey, dbPath, wxid, cachePath, imageXorKey, imageAesKey, exportPath,
-    sttLanguages, sttModelType, skipIntegrityCheck, autoUpdateDatabase,
+    sttLanguages, sttModelType, sttMode, sttOnlineProvider, sttOnlineApiKey, sttOnlineBaseURL,
+    sttOnlineModel, sttOnlineLanguage, sttOnlineTimeoutMs, sttOnlineMaxConcurrency, skipIntegrityCheck, autoUpdateDatabase,
     autoUpdateCheckInterval, autoUpdateMinInterval, autoUpdateDebounceTime,
     quoteStyle, exportDefaultDateRange, exportDefaultAvatars,
     aiProvider, aiApiKey, aiModel, aiDefaultTimeRange, aiSummaryDetail,
@@ -949,7 +1079,7 @@ function SettingsPage() {
       setDbConnected(true, target.dbPath)
       setCurrentWxid(target.wxid)
       await refreshAccountsState(target.id)
-      showMessage(`已切换到账号：${target.displayName}`, true)
+      showMessage(`已切换到账号：${getAccountDisplayName(target)}`, true)
     } catch (e) {
       showMessage(`切换账号失败: ${e}`, false)
     } finally {
@@ -962,7 +1092,7 @@ function SettingsPage() {
     setSecurityConfirm({
       show: true,
       title: '删除账号',
-      message: `删除账号 ${account.displayName || account.wxid}？此操作仅删除配置，不删除本地解密数据。`,
+      message: `删除账号 ${getAccountDisplayName(account)}？此操作仅删除配置，不删除本地解密数据。`,
       onConfirm: async () => {
         const result = await configService.deleteAccount(account.id, false)
         if (result.success) {
@@ -980,7 +1110,7 @@ function SettingsPage() {
     setSecurityConfirm({
       show: true,
       title: '删除账号并清理本地数据',
-      message: `将删除账号 ${account.displayName || account.wxid} 的配置，并尝试删除该账号对应的本地解密数据库缓存。`,
+      message: `将删除账号 ${getAccountDisplayName(account)} 的配置，并尝试删除该账号对应的本地解密数据库缓存。`,
       onConfirm: async () => {
         const result = await configService.deleteAccount(account.id, true)
         if (result.success) {
@@ -1244,6 +1374,15 @@ function SettingsPage() {
       await configService.setAiEnableThinking(aiEnableThinking)
       await configService.setAiMessageLimit(aiMessageLimit)
 
+      await configService.setSttMode(sttMode)
+      await configService.setSttOnlineProvider(sttOnlineProvider)
+      await configService.setSttOnlineApiKey(sttOnlineApiKey)
+      await configService.setSttOnlineBaseURL(sttOnlineBaseURL)
+      await configService.setSttOnlineModel(sttOnlineModel)
+      await configService.setSttOnlineLanguage(sttOnlineLanguage)
+      await configService.setSttOnlineTimeoutMs(sttOnlineTimeoutMs)
+      await configService.setSttOnlineMaxConcurrency(sttOnlineMaxConcurrency)
+
       // 保存关闭行为配置
       await configService.setCloseToTray(closeToTray)
 
@@ -1267,6 +1406,14 @@ function SettingsPage() {
         exportPath,
         sttLanguages,
         sttModelType,
+        sttMode,
+        sttOnlineProvider,
+        sttOnlineApiKey,
+        sttOnlineBaseURL,
+        sttOnlineModel,
+        sttOnlineLanguage,
+        sttOnlineTimeoutMs,
+        sttOnlineMaxConcurrency,
         skipIntegrityCheck,
         autoUpdateDatabase,
         autoUpdateCheckInterval,
@@ -1452,7 +1599,7 @@ function SettingsPage() {
       <h3 className="section-title">账号管理</h3>
       <div className="form-group">
         <div className="form-hint" style={{ marginBottom: '10px' }}>
-          当前激活账号：{accountsList.find(item => item.id === activeAccountId)?.displayName || '未设置'}
+          当前激活账号：{getAccountDisplayName(accountsList.find(item => item.id === activeAccountId) || null) || '未设置'}
         </div>
         {accountsList.length > 0 ? (
           <div className="wxid-options">
@@ -1463,10 +1610,10 @@ function SettingsPage() {
                 onClick={() => handleSelectAccountForEdit(account)}
               >
                 <div className="wxid-option-name">
-                  {account.displayName}
+                  {getAccountDisplayName(account)}
                   {account.id === activeAccountId ? '（当前激活）' : ''}
                 </div>
-                <div className="field-hint">{account.wxid || '未设置 wxid'}</div>
+                <div className="field-hint">微信 ID：{account.wxid || '未设置'}</div>
                 <div className="field-hint">{account.dbPath || '未设置数据库路径'}</div>
               </button>
             ))}
@@ -1890,9 +2037,6 @@ function SettingsPage() {
   const [isDownloadingGpuComponents, setIsDownloadingGpuComponents] = useState(false)
   const [gpuDownloadProgress, setGpuDownloadProgress] = useState({ overallProgress: 0, currentFile: '' })
 
-  // ========== STT 模式切换 ==========
-  const [sttMode, setSttMode] = useState<'cpu' | 'gpu'>('cpu')
-
   // 加载 STT 模型状态
   useEffect(() => {
     if (activeTab === 'stt') {
@@ -1904,14 +2048,37 @@ function SettingsPage() {
   }, [activeTab])
 
   const loadSttMode = async () => {
-    const savedMode = await window.electronAPI.config.get('sttMode') as 'cpu' | 'gpu' | undefined
+    const savedMode = await configService.getSttMode()
     setSttMode(savedMode || 'cpu')
   }
 
-  const handleSttModeChange = async (mode: 'cpu' | 'gpu') => {
+  const handleSttModeChange = async (mode: 'cpu' | 'gpu' | 'online') => {
     setSttMode(mode)
-    await window.electronAPI.config.set('sttMode', mode)
-    showMessage(mode === 'cpu' ? '已切换到 CPU 模式 (SenseVoice)' : '已切换到 GPU 模式 (Whisper)', true)
+    await configService.setSttMode(mode)
+    showMessage(
+      mode === 'cpu'
+        ? '已切换到 CPU 模式 (SenseVoice)'
+        : mode === 'gpu'
+          ? '已切换到 GPU 模式 (Whisper)'
+          : '已切换到在线模式 (OpenAI 兼容)',
+      true
+    )
+  }
+
+  const handleTestOnlineSttConfig = async () => {
+    const result = await window.electronAPI.stt.testOnlineConfig({
+      provider: sttOnlineProvider,
+      apiKey: sttOnlineApiKey,
+      baseURL: sttOnlineBaseURL,
+      model: sttOnlineModel,
+      language: sttOnlineLanguage,
+      timeoutMs: sttOnlineTimeoutMs
+    })
+    if (result.success) {
+      showMessage('在线转写配置测试成功', true)
+    } else {
+      showMessage(result.error || '在线转写配置测试失败', false)
+    }
   }
 
   // 监听 STT 下载进度
@@ -2130,6 +2297,12 @@ function SettingsPage() {
           onClick={() => handleSttModeChange('gpu')}
         >
           <Zap size={16} /> GPU 模式
+        </button>
+        <button
+          className={`mode-btn ${sttMode === 'online' ? 'active' : ''}`}
+          onClick={() => handleSttModeChange('online')}
+        >
+          <Plug size={16} /> 在线模式
         </button>
       </div>
 
@@ -2612,18 +2785,194 @@ function SettingsPage() {
         </>
       )}
 
-      <h3 className="section-title" style={{ marginTop: '2rem' }}>使用说明</h3>
-      <div className="stt-instructions">
-        <ol>
-          <li>选择 CPU 或 GPU 模式</li>
-          <li>下载对应的语音识别模型（仅需一次）</li>
-          <li>在聊天记录中点击语音消息</li>
-          <li>点击"转文字"按钮即可将语音转换为文字</li>
-        </ol>
-        <p className="note">
-          <strong>注意：</strong>所有语音识别均在本地完成，不会上传任何数据，保护您的隐私。
-        </p>
-      </div>
+      {sttMode === 'online' && (
+        <div className="stt-online-settings">
+          <h3 className="section-title">在线语音转写</h3>
+          <p className="section-desc">
+            使用在线接口进行语音转文字，无需下载本地模型。语音数据会发送到第三方服务，可能产生网络延迟与 API 费用。
+          </p>
+
+          <div className="form-group">
+            <label>提供商</label>
+            <span className="form-hint">
+              {sttOnlineProvider === 'openai-compatible'
+                ? '选择 OpenAI 兼容时会自动补全标准路径'
+                : sttOnlineProvider === 'aliyun-qwen-asr'
+                  ? '阿里云走 DashScope 兼容入口，但内部使用 chat/completions + input_audio 协议'
+                  : '自定义接口会直接使用你填写的完整 URL'}
+            </span>
+            <div className="theme-mode-toggle" style={{ marginBottom: 0 }}>
+              {sttOnlineProviderOptions.map((option) => (
+                <button
+                  key={option.value}
+                  type="button"
+                  className={`mode-btn ${sttOnlineProvider === option.value ? 'active' : ''}`}
+                  onClick={() => {
+                    setSttOnlineProvider(option.value)
+
+                    if (option.value === 'aliyun-qwen-asr') {
+                      if (!sttOnlineBaseURL || sttOnlineBaseURL === STT_ONLINE_DEFAULTS['openai-compatible'].baseURL) {
+                        setSttOnlineBaseURL(STT_ONLINE_DEFAULTS['aliyun-qwen-asr'].baseURL)
+                      }
+                      if (!sttOnlineModel || sttOnlineModel === STT_ONLINE_DEFAULTS['openai-compatible'].model) {
+                        setSttOnlineModel(STT_ONLINE_DEFAULTS['aliyun-qwen-asr'].model)
+                      }
+                    } else if (option.value === 'openai-compatible') {
+                      if (!sttOnlineBaseURL || sttOnlineBaseURL === STT_ONLINE_DEFAULTS['aliyun-qwen-asr'].baseURL) {
+                        setSttOnlineBaseURL(STT_ONLINE_DEFAULTS['openai-compatible'].baseURL)
+                      }
+                      if (!sttOnlineModel || sttOnlineModel === STT_ONLINE_DEFAULTS['aliyun-qwen-asr'].model) {
+                        setSttOnlineModel(STT_ONLINE_DEFAULTS['openai-compatible'].model)
+                      }
+                    }
+                  }}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="form-group">
+            <label>接口 URL</label>
+            <span className="form-hint">
+              {sttOnlineProvider === 'openai-compatible'
+                ? '支持填写完整接口 URL，如 `https://api.openai.com/v1/audio/transcriptions`；也兼容只填 `/v1` 基地址'
+                : sttOnlineProvider === 'aliyun-qwen-asr'
+                  ? '建议填写 DashScope 兼容入口，如 `https://dashscope.aliyuncs.com/compatible-mode/v1`'
+                  : '请输入完整接口 URL，系统会按你填写的地址原样发起请求'}
+            </span>
+            <input
+              type="text"
+              value={sttOnlineBaseURL}
+              onChange={(e) => setSttOnlineBaseURL(e.target.value)}
+              placeholder={
+                sttOnlineProvider === 'openai-compatible'
+                  ? 'https://api.openai.com/v1/audio/transcriptions'
+                  : sttOnlineProvider === 'aliyun-qwen-asr'
+                    ? 'https://dashscope.aliyuncs.com/compatible-mode/v1'
+                    : 'https://your-api.example.com/full/path'
+              }
+            />
+          </div>
+
+          <div className="form-group">
+            <label>API Key</label>
+            <span className="form-hint">用于调用在线语音识别接口</span>
+            <input
+              type="password"
+              value={sttOnlineApiKey}
+              onChange={(e) => setSttOnlineApiKey(e.target.value)}
+              placeholder="请输入在线 STT API Key"
+            />
+          </div>
+
+          <div className="form-group">
+            <label>模型名称</label>
+            <span className="form-hint">
+              {sttOnlineProvider === 'aliyun-qwen-asr'
+                ? '阿里云当前可用模型为 `qwen3-asr-flash` 与 `qwen3-asr-flash-filetrans`，默认使用 `qwen3-asr-flash`'
+                : '默认使用 `gpt-4o-mini-transcribe`，也可替换为兼容模型名'}
+            </span>
+            <input
+              type="text"
+              value={sttOnlineModel}
+              onChange={(e) => setSttOnlineModel(e.target.value)}
+              placeholder={sttOnlineProvider === 'aliyun-qwen-asr' ? 'qwen3-asr-flash' : 'gpt-4o-mini-transcribe'}
+            />
+          </div>
+
+          <div className="advanced-params-grid">
+            <div className="param-item">
+              <label>识别语言</label>
+              <div className="custom-select" ref={sttOnlineLanguageRef}>
+                <button
+                  type="button"
+                  className={`custom-select-trigger ${showSttOnlineLanguageDropdown ? 'is-open' : ''}`}
+                  onClick={() => setShowSttOnlineLanguageDropdown(prev => !prev)}
+                >
+                  <span>{sttOnlineLanguageOptions.find(option => option.value === sttOnlineLanguage)?.label || '自动识别'}</span>
+                  <ChevronDown size={16} />
+                </button>
+                {showSttOnlineLanguageDropdown && (
+                  <div className="custom-select-menu">
+                    {sttOnlineLanguageOptions.map((option) => (
+                      <button
+                        key={option.value}
+                        type="button"
+                        className={`custom-select-option ${sttOnlineLanguage === option.value ? 'is-active' : ''}`}
+                        onClick={() => {
+                          setSttOnlineLanguage(option.value)
+                          setShowSttOnlineLanguageDropdown(false)
+                        }}
+                      >
+                        <span>{option.label}</span>
+                        {sttOnlineLanguage === option.value && <Check size={14} />}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="param-item">
+              <label>超时时间（毫秒）</label>
+              <div className="number-control">
+                <button className="control-btn minus" type="button" onClick={() => setSttOnlineTimeoutMs(prev => Math.max(5000, prev - 5000))}>
+                  <Minus size={14} />
+                </button>
+                <div className="value-display">
+                  <input
+                    type="number"
+                    value={sttOnlineTimeoutMs}
+                    onChange={(e) => setSttOnlineTimeoutMs(Math.max(5000, Number(e.target.value) || 60000))}
+                  />
+                </div>
+                <button className="control-btn plus" type="button" onClick={() => setSttOnlineTimeoutMs(prev => Math.min(300000, prev + 5000))}>
+                  <Plus size={14} />
+                </button>
+              </div>
+            </div>
+
+            <div className="param-item">
+              <label>批量并发数</label>
+              <div className="number-control">
+                <button className="control-btn minus" type="button" onClick={() => setSttOnlineMaxConcurrency(prev => Math.max(1, prev - 1))}>
+                  <Minus size={14} />
+                </button>
+                <div className="value-display">
+                  <input
+                    type="number"
+                    value={sttOnlineMaxConcurrency}
+                    onChange={(e) => setSttOnlineMaxConcurrency(Math.max(1, Math.min(10, Number(e.target.value) || 2)))}
+                  />
+                </div>
+                <button className="control-btn plus" type="button" onClick={() => setSttOnlineMaxConcurrency(prev => Math.min(10, prev + 1))}>
+                  <Plus size={14} />
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div className="btn-row" style={{ marginTop: '1rem' }}>
+            <button className="btn btn-secondary" onClick={handleTestOnlineSttConfig}>
+              <Plug size={16} /> 测试在线配置
+            </button>
+          </div>
+
+          <div className="stt-instructions" style={{ marginTop: '1.5rem' }}>
+            <ol>
+              <li>在线模式会把语音文件发送到第三方 STT 服务进行识别</li>
+              <li>识别效果取决于服务商模型、网络状况和接口限流策略</li>
+              <li>批量转写会按并发数逐批发送，避免触发过高频率限制</li>
+            </ol>
+            <p className="note">
+              <strong>注意：</strong>在线模式不再依赖本地模型下载，但会产生隐私和费用成本，请确认后再使用。
+            </p>
+          </div>
+        </div>
+      )}
+
     </div>
   )
 

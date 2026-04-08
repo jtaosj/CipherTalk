@@ -45,6 +45,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('accounts:delete', accountId, deleteLocalData) as Promise<{ success: boolean; error?: string; deleted?: AccountProfile | null; nextActiveAccountId?: string }>
   },
 
+  skillInstaller: {
+    exportSkillZip: (skillName: string) =>
+      ipcRenderer.invoke('skillInstaller:exportSkillZip', skillName) as Promise<{ success: boolean; outputPath?: string; fileName?: string; version?: string; error?: string }>
+  },
+
   // 数据库操作
   db: {
     open: (dbPath: string, key?: string) => ipcRenderer.invoke('db:open', dbPath, key),
@@ -68,7 +73,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // 文件操作
   file: {
     delete: (filePath: string) => ipcRenderer.invoke('file:delete', filePath),
-    copy: (sourcePath: string, destPath: string) => ipcRenderer.invoke('file:copy', sourcePath, destPath)
+    copy: (sourcePath: string, destPath: string) => ipcRenderer.invoke('file:copy', sourcePath, destPath),
+    writeBase64: (filePath: string, base64Data: string) => ipcRenderer.invoke('file:writeBase64', filePath, base64Data)
   },
 
   // Shell
@@ -444,6 +450,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getModelStatus: () => ipcRenderer.invoke('stt:getModelStatus'),
     downloadModel: () => ipcRenderer.invoke('stt:downloadModel'),
     transcribe: (wavBase64: string, sessionId: string, createTime: number, force?: boolean) => ipcRenderer.invoke('stt:transcribe', wavBase64, sessionId, createTime, force),
+    testOnlineConfig: (overrides?: { provider?: 'openai-compatible' | 'aliyun-qwen-asr' | 'custom'; apiKey?: string; baseURL?: string; model?: string; language?: string; timeoutMs?: number }) =>
+      ipcRenderer.invoke('stt-online:test-config', overrides),
     onDownloadProgress: (callback: (progress: { modelName: string; downloadedBytes: number; totalBytes?: number; percent?: number }) => void) => {
       ipcRenderer.on('stt:downloadProgress', (_, progress) => callback(progress))
       return () => ipcRenderer.removeAllListeners('stt:downloadProgress')

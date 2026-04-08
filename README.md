@@ -7,7 +7,7 @@
 **一款现代化的微信聊天记录查看与分析工具**
 
 [![License](https://img.shields.io/badge/license-CC--BY--NC--SA--4.0-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-4.0.1-green.svg)](package.json)
+[![Version](https://img.shields.io/badge/version-4.1.0-green.svg)](package.json)
 [![Platform](https://img.shields.io/badge/platform-Windows-0078D6.svg?logo=windows)]()
 [![Electron](https://img.shields.io/badge/Electron-39-47848F.svg?logo=electron)]()
 [![React](https://img.shields.io/badge/React-19-61DAFB.svg?logo=react)]()
@@ -361,6 +361,44 @@ macOS:
 ```
 
 macOS 打包态请直接指向 `.app` 内部的 `ciphertalk-mcp`，不要把 `CipherTalk.app` 本体当作 `command`。
+
+### AI Copilot Skill
+
+项目内置了 `ct-mcp-copilot` skill，用于让支持 Skills 的 Agent 更智能地使用 CipherTalk MCP：
+
+- 模糊联系人 / 会话查找
+- 线索补挖和候选比较
+- 导出前补问和请求校验
+
+在应用内的 MCP 页面可以一键安装到本机支持的 Agent：
+
+- Codex：`~/.codex/skills`
+- `.agents`：`~/.agents/skills`
+- 以及主目录下发现的其他 `skills` 目录（如路径特征明显匹配 Agent）
+
+Skill 使用独立版本号，不跟应用版本绑定。页面会显示：
+
+- 当前内置 skill 版本
+- 本机已安装版本
+- 是否可更新（仅对比本地已安装版本是否落后）
+
+还支持直接导出本地 skill 压缩包：
+
+- 文件名格式：`ct-mcp-copilot-v<skillVersion>.zip`
+- 默认导出到系统 Downloads 目录
+- 可用于手动导入到支持 skills 的 Agent
+
+安装后可直接这样使用：
+
+- `使用 ct-mcp-copilot 帮我查这个人`
+- `使用 ct-mcp-copilot 帮我补全导出问题`
+
+说明：
+
+- 安装器使用“复制安装”，不会创建软链接
+- 当前只管理内置 skill `ct-mcp-copilot`
+- 当前只检查本地已安装版本是否落后，不检查远程最新版本
+- Cherry Studio 等 MCP 宿主继续使用 `mcpServers` 配置，不属于 skills 目录安装模型
 
 ### 参数示例
 

@@ -17,6 +17,14 @@ export const CONFIG_KEYS = {
   AGREEMENT_VERSION: 'agreementVersion',
   STT_LANGUAGES: 'sttLanguages',
   STT_MODEL_TYPE: 'sttModelType',
+  STT_MODE: 'sttMode',
+  STT_ONLINE_PROVIDER: 'sttOnlineProvider',
+  STT_ONLINE_API_KEY: 'sttOnlineApiKey',
+  STT_ONLINE_BASE_URL: 'sttOnlineBaseURL',
+  STT_ONLINE_MODEL: 'sttOnlineModel',
+  STT_ONLINE_LANGUAGE: 'sttOnlineLanguage',
+  STT_ONLINE_TIMEOUT_MS: 'sttOnlineTimeoutMs',
+  STT_ONLINE_MAX_CONCURRENCY: 'sttOnlineMaxConcurrency',
   QUOTE_STYLE: 'quoteStyle',
   SKIP_INTEGRITY_CHECK: 'skipIntegrityCheck',
   EXPORT_DEFAULT_DATE_RANGE: 'exportDefaultDateRange',
@@ -277,6 +285,78 @@ export async function getSttModelType(): Promise<'int8' | 'float32'> {
 // 设置 STT 模型类型
 export async function setSttModelType(type: 'int8' | 'float32'): Promise<void> {
   await config.set(CONFIG_KEYS.STT_MODEL_TYPE, type)
+}
+
+export async function getSttMode(): Promise<'cpu' | 'gpu' | 'online'> {
+  const value = await config.get(CONFIG_KEYS.STT_MODE)
+  return (value as 'cpu' | 'gpu' | 'online') || 'cpu'
+}
+
+export async function setSttMode(mode: 'cpu' | 'gpu' | 'online'): Promise<void> {
+  await config.set(CONFIG_KEYS.STT_MODE, mode)
+}
+
+export async function getSttOnlineProvider(): Promise<'openai-compatible' | 'aliyun-qwen-asr' | 'custom'> {
+  const value = await config.get(CONFIG_KEYS.STT_ONLINE_PROVIDER)
+  return (value as 'openai-compatible' | 'aliyun-qwen-asr' | 'custom') || 'openai-compatible'
+}
+
+export async function setSttOnlineProvider(provider: 'openai-compatible' | 'aliyun-qwen-asr' | 'custom'): Promise<void> {
+  await config.set(CONFIG_KEYS.STT_ONLINE_PROVIDER, provider)
+}
+
+export async function getSttOnlineApiKey(): Promise<string> {
+  const value = await config.get(CONFIG_KEYS.STT_ONLINE_API_KEY)
+  return (value as string) || ''
+}
+
+export async function setSttOnlineApiKey(apiKey: string): Promise<void> {
+  await config.set(CONFIG_KEYS.STT_ONLINE_API_KEY, apiKey.trim())
+}
+
+export async function getSttOnlineBaseURL(): Promise<string> {
+  const value = await config.get(CONFIG_KEYS.STT_ONLINE_BASE_URL)
+  return (value as string) || 'https://api.openai.com/v1'
+}
+
+export async function setSttOnlineBaseURL(baseURL: string): Promise<void> {
+  await config.set(CONFIG_KEYS.STT_ONLINE_BASE_URL, baseURL.trim())
+}
+
+export async function getSttOnlineModel(): Promise<string> {
+  const value = await config.get(CONFIG_KEYS.STT_ONLINE_MODEL)
+  return (value as string) || 'gpt-4o-mini-transcribe'
+}
+
+export async function setSttOnlineModel(model: string): Promise<void> {
+  await config.set(CONFIG_KEYS.STT_ONLINE_MODEL, model.trim())
+}
+
+export async function getSttOnlineLanguage(): Promise<string> {
+  const value = await config.get(CONFIG_KEYS.STT_ONLINE_LANGUAGE)
+  return (value as string) || 'auto'
+}
+
+export async function setSttOnlineLanguage(language: string): Promise<void> {
+  await config.set(CONFIG_KEYS.STT_ONLINE_LANGUAGE, language.trim() || 'auto')
+}
+
+export async function getSttOnlineTimeoutMs(): Promise<number> {
+  const value = await config.get(CONFIG_KEYS.STT_ONLINE_TIMEOUT_MS)
+  return Number(value) || 60000
+}
+
+export async function setSttOnlineTimeoutMs(timeoutMs: number): Promise<void> {
+  await config.set(CONFIG_KEYS.STT_ONLINE_TIMEOUT_MS, Math.max(5000, Math.min(300000, Math.floor(timeoutMs))))
+}
+
+export async function getSttOnlineMaxConcurrency(): Promise<number> {
+  const value = await config.get(CONFIG_KEYS.STT_ONLINE_MAX_CONCURRENCY)
+  return Number(value) || 2
+}
+
+export async function setSttOnlineMaxConcurrency(concurrency: number): Promise<void> {
+  await config.set(CONFIG_KEYS.STT_ONLINE_MAX_CONCURRENCY, Math.max(1, Math.min(10, Math.floor(concurrency))))
 }
 
 

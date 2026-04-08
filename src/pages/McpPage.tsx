@@ -6,6 +6,7 @@ import {
   Card,
   CardContent,
   CardHeader,
+  Chip,
   Container,
   Snackbar,
   Stack,
@@ -13,7 +14,7 @@ import {
   TextField,
   Typography,
 } from '@mui/material'
-import { Check, Copy, Save } from 'lucide-react'
+import { Check, Copy, Download, Save } from 'lucide-react'
 import * as configService from '../services/config'
 
 type ToastState = {
@@ -27,6 +28,8 @@ type McpLaunchConfig = {
   cwd: string
   mode: 'dev' | 'packaged'
 }
+
+type McpSection = 'mcp' | 'skill'
 
 function formatCommandPart(value: string) {
   if (!value) return value
@@ -90,10 +93,13 @@ const secondaryButtonSx = {
 }
 
 function McpPage() {
+  const managedSkillName = 'ct-mcp-copilot'
+  const [activeSection, setActiveSection] = useState<McpSection>('mcp')
   const [mcpEnabled, setMcpEnabled] = useState(false)
   const [mcpExposeMediaPaths, setMcpExposeMediaPaths] = useState(true)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
+  const [exportingSkillZip, setExportingSkillZip] = useState(false)
   const [toast, setToast] = useState<ToastState | null>(null)
   const [launchConfig, setLaunchConfig] = useState<McpLaunchConfig>({
     command: 'npm',
@@ -174,19 +180,69 @@ function McpPage() {
     }
   }
 
+  const exportManagedSkillZip = async () => {
+    setExportingSkillZip(true)
+    try {
+      const result = await window.electronAPI.skillInstaller.exportSkillZip(managedSkillName)
+      if (result.success) {
+        setToast({ text: `Skill 压缩包已导出到 ${result.outputPath}`, success: true })
+      } else {
+        setToast({ text: result.error || '导出 Skill 压缩包失败', success: false })
+      }
+    } catch (e) {
+      console.error('导出 Skill 压缩包失败:', e)
+      setToast({ text: '导出 Skill 压缩包失败', success: false })
+    } finally {
+      setExportingSkillZip(false)
+    }
+  }
+
   return (
     <Box sx={{ height: '100%', mx: -3, mt: -3, overflowY: 'auto', pb: 3 }}>
       <Container maxWidth="lg" sx={{ px: { xs: 2, md: 4 }, py: { xs: 3, md: 4 } }}>
         <Stack spacing={2.2}>
-        <Box sx={{ px: { xs: 0.5, md: 1 }, pt: 0.5 }}>
-          <Typography variant="h4" sx={{ fontSize: 30, fontWeight: 700, color: 'var(--text-primary)' }}>
-            MCP Server
-          </Typography>
-          <Typography sx={{ mt: 1, color: 'var(--text-secondary)' }}>
-            使用标准 MCP `stdio` 工具接口为 Claude Desktop、Codex、Cherry Studio 等宿主提供本地聊天数据读取能力。
-          </Typography>
-        </Box>
+          <Stack direction="row" spacing={1} sx={{ px: { xs: 0.5, md: 1 }, pt: 0.5 }}>
+            <Button
+              variant={activeSection === 'mcp' ? 'contained' : 'outlined'}
+              onClick={() => setActiveSection('mcp')}
+              sx={activeSection === 'mcp'
+                ? {
+                    borderRadius: '999px',
+                    textTransform: 'none',
+                    fontWeight: 700,
+                    minWidth: 88,
+                    background: 'var(--primary-gradient)',
+                    '&:hover': {
+                      background: 'var(--primary-gradient)',
+                      filter: 'brightness(0.98)',
+                    },
+                  }
+                : secondaryButtonSx}
+            >
+              MCP
+            </Button>
+            <Button
+              variant={activeSection === 'skill' ? 'contained' : 'outlined'}
+              onClick={() => setActiveSection('skill')}
+              sx={activeSection === 'skill'
+                ? {
+                    borderRadius: '999px',
+                    textTransform: 'none',
+                    fontWeight: 700,
+                    minWidth: 88,
+                    background: 'var(--primary-gradient)',
+                    '&:hover': {
+                      background: 'var(--primary-gradient)',
+                      filter: 'brightness(0.98)',
+                    },
+                  }
+                : secondaryButtonSx}
+            >
+              Skill
+            </Button>
+          </Stack>
 
+        {activeSection === 'mcp' && (
         <Card
           sx={{
             borderRadius: '26px',
@@ -362,6 +418,71 @@ function McpPage() {
             </Stack>
           </CardContent>
         </Card>
+        )}
+
+        {activeSection === 'skill' && (
+        <Card
+          sx={{
+            borderRadius: '26px',
+            border: '1px solid var(--border-color)',
+            bgcolor: 'var(--bg-secondary)',
+            boxShadow: 'none',
+          }}
+        >
+          <CardHeader
+            title="AI Copilot Skill"
+            titleTypographyProps={{ fontWeight: 700, fontSize: 18, color: 'var(--text-primary)' }}
+            sx={{ px: { xs: 2, md: 3 }, pb: 0.8 }}
+          />
+          <CardContent sx={{ px: { xs: 2, md: 3 }, pt: 0.6 }}>
+            <Stack spacing={2.2}>
+              <Alert
+                severity="info"
+                variant="outlined"
+                sx={{
+                  borderRadius: '18px',
+                  bgcolor: 'var(--bg-primary)',
+                  borderColor: 'var(--border-color)',
+                  color: 'var(--text-primary)',
+                }}
+              >
+                内置 Skill `ct-mcp-copilot` 可帮助支持 Skills 的 Agent 更聪明地使用 CipherTalk MCP 做模糊联系人查找、会话定位和导出补问。
+              </Alert>
+
+              <Box
+                sx={{
+                  p: 2,
+                  borderRadius: '18px',
+                  border: '1px solid var(--border-color)',
+                  bgcolor: 'var(--bg-primary)',
+                }}
+              >
+                <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.2} justifyContent="space-between" alignItems={{ xs: 'stretch', sm: 'center' }}>
+                  <Box>
+                    <Typography sx={{ fontWeight: 600, color: 'var(--text-primary)' }}>导出 Skill</Typography>
+                    <Typography sx={{ mt: 0.5, fontSize: 13, color: 'var(--text-secondary)' }}>
+                      导出 `ct-mcp-copilot` zip 包后，可手动导入到支持 Skills 的 Agent（Codex、Claude、Cursor、Kiro 等）。
+                    </Typography>
+                  </Box>
+                  <Button
+                    variant="outlined"
+                    startIcon={<Download size={16} />}
+                    onClick={exportManagedSkillZip}
+                    disabled={exportingSkillZip}
+                    sx={secondaryButtonSx}
+                  >
+                    {exportingSkillZip ? '导出中...' : '导出 zip'}
+                  </Button>
+                </Stack>
+              </Box>
+
+              <Typography sx={{ fontSize: 13, color: 'var(--text-secondary)' }}>
+                导出 zip 后手动解压到对应 Agent 的 skills 目录即可使用。Cherry Studio 等 MCP 宿主继续使用 `mcpServers` 配置，无需安装 Skill。
+              </Typography>
+            </Stack>
+          </CardContent>
+        </Card>
+        )}
         </Stack>
       </Container>
 

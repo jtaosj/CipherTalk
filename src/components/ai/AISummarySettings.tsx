@@ -3,6 +3,7 @@ import { Eye, EyeOff, Sparkles, Check, ChevronDown, ChevronUp, Zap, Star, FileTe
 import { getAIProviders, type AIProviderInfo } from '../../types/ai'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
+import AIProviderLogo from './AIProviderLogo'
 import './AISummarySettings.scss'
 
 interface CustomSelectProps {
@@ -496,7 +497,13 @@ function AISummarySettings({
       <div className="current-config-card">
         <div className="config-provider-info">
           {currentProvider?.logo ? (
-            <img src={currentProvider.logo} alt={currentProvider.displayName} className="provider-logo-large" />
+            <AIProviderLogo
+              providerId={currentProvider.id}
+              logo={currentProvider.logo}
+              alt={currentProvider.displayName}
+              className="provider-logo-large"
+              size={40}
+            />
           ) : (
             <div className="provider-logo-skeleton-large" />
           )}
@@ -813,7 +820,13 @@ function AISummarySettings({
                         onClick={() => handleSelectProvider(p.id)}
                       >
                         {p.logo ? (
-                          <img src={p.logo} alt={p.displayName} className="provider-logo" />
+                          <AIProviderLogo
+                            providerId={p.id}
+                            logo={p.logo}
+                            alt={p.displayName}
+                            className="provider-logo"
+                            size={18}
+                          />
                         ) : (
                           <div className="provider-logo-skeleton" />
                         )}

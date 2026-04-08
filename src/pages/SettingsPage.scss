@@ -2907,6 +2907,228 @@ to {
   }
 }
 
+.stt-online-settings {
+  padding: 16px 20px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+
+  .advanced-params-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 16px;
+    margin-top: 12px;
+
+    @media (max-width: 768px) {
+      grid-template-columns: 1fr;
+    }
+  }
+
+  .param-item {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+
+    > label {
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--text-primary);
+      margin-bottom: 2px;
+    }
+  }
+
+  .param-select {
+    height: 40px;
+    width: 100%;
+    min-width: 0;
+    padding: 0 12px;
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+
+    &:focus {
+      outline: none;
+      border-color: var(--primary);
+      box-shadow: 0 0 0 2px rgba(var(--primary-rgb), 0.1);
+    }
+  }
+
+  .custom-select {
+    position: relative;
+  }
+
+  .custom-select-trigger {
+    width: 100%;
+    height: 40px;
+    padding: 0 14px;
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    cursor: pointer;
+    transition: all 0.2s;
+
+    &:hover {
+      border-color: color-mix(in srgb, var(--primary) 55%, var(--border-color));
+      background: var(--bg-tertiary);
+    }
+
+    &:focus {
+      outline: none;
+      border-color: var(--primary);
+      box-shadow: 0 0 0 2px rgba(var(--primary-rgb), 0.1);
+    }
+
+    svg {
+      color: var(--text-secondary);
+      flex-shrink: 0;
+      transition: transform 0.2s ease;
+    }
+
+    &.is-open {
+      border-color: var(--primary);
+      box-shadow: 0 0 0 2px rgba(var(--primary-rgb), 0.1);
+
+      svg {
+        transform: rotate(180deg);
+      }
+    }
+  }
+
+  .custom-select-menu {
+    position: absolute;
+    top: calc(100% + 8px);
+    left: 0;
+    right: 0;
+    z-index: 20;
+    padding: 8px;
+    background: color-mix(in srgb, var(--bg-primary) 92%, black 8%);
+    border: 1px solid color-mix(in srgb, var(--primary) 40%, var(--border-color));
+    border-radius: 14px;
+    box-shadow: 0 18px 36px rgba(0, 0, 0, 0.22);
+    backdrop-filter: blur(18px);
+    animation: fadeInUp 0.18s ease;
+  }
+
+  .custom-select-option {
+    width: 100%;
+    min-height: 40px;
+    padding: 0 12px;
+    border: none;
+    border-radius: 10px;
+    background: transparent;
+    color: var(--text-primary);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    text-align: left;
+    cursor: pointer;
+    transition: all 0.16s ease;
+
+    &:hover {
+      background: color-mix(in srgb, var(--primary) 14%, transparent);
+    }
+
+    &.is-active {
+      background: color-mix(in srgb, var(--primary) 20%, transparent);
+      color: var(--primary);
+      font-weight: 600;
+    }
+
+    svg {
+      flex-shrink: 0;
+    }
+  }
+
+  .number-control {
+    display: flex;
+    align-items: center;
+    background: var(--bg-primary);
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    overflow: hidden;
+    height: 40px;
+    transition: all 0.2s;
+
+    &:focus-within {
+      border-color: var(--primary);
+      box-shadow: 0 0 0 2px rgba(var(--primary-rgb), 0.1);
+    }
+
+    .control-btn {
+      width: 36px;
+      height: 100%;
+      border: none;
+      background: var(--bg-secondary);
+      color: var(--text-secondary);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      flex-shrink: 0;
+      transition: all 0.2s;
+
+      &:hover {
+        background: var(--bg-tertiary);
+        color: var(--text-primary);
+      }
+    }
+
+    .control-btn.minus {
+      border-right: 1px solid var(--border-color);
+    }
+
+    .control-btn.plus {
+      border-left: 1px solid var(--border-color);
+    }
+
+    .value-display {
+      flex: 1;
+      min-width: 0;
+      height: 100%;
+      display: flex;
+      align-items: center;
+      padding: 0 12px;
+
+      input {
+        width: 100%;
+        min-width: 0;
+        height: auto;
+        padding: 0;
+        margin: 0;
+        border: none;
+        background: transparent;
+        color: var(--text-primary);
+        text-align: center;
+        font-weight: 500;
+
+        &:focus {
+          outline: none;
+          box-shadow: none;
+        }
+      }
+    }
+  }
+}
+
+@keyframes fadeInUp {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
 .api-settings {
   .api-status-grid {
     display: grid;

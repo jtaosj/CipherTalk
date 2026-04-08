@@ -65,8 +65,15 @@ interface ConfigSchema {
   // STT 相关
   sttLanguages: string[]
   sttModelType: 'int8' | 'float32'
-  sttMode: 'cpu' | 'gpu'  // STT 模式：CPU (SenseVoice) 或 GPU (Whisper)
+  sttMode: 'cpu' | 'gpu' | 'online'  // STT 模式：CPU / GPU / 在线
   whisperModelType: 'tiny' | 'base' | 'small' | 'medium'  // Whisper 模型类型
+  sttOnlineProvider: 'openai-compatible' | 'aliyun-qwen-asr' | 'custom'
+  sttOnlineApiKey: string
+  sttOnlineBaseURL: string
+  sttOnlineModel: string
+  sttOnlineLanguage: string
+  sttOnlineTimeoutMs: number
+  sttOnlineMaxConcurrency: number
 
   // 日志相关
   logLevel: string
@@ -134,6 +141,13 @@ const defaults: ConfigSchema = {
   sttModelType: 'int8',
   sttMode: 'cpu',  // 默认使用 CPU 模式
   whisperModelType: 'small',  // 默认使用 small 模型
+  sttOnlineProvider: 'openai-compatible',
+  sttOnlineApiKey: '',
+  sttOnlineBaseURL: 'https://api.openai.com/v1',
+  sttOnlineModel: 'gpt-4o-mini-transcribe',
+  sttOnlineLanguage: 'auto',
+  sttOnlineTimeoutMs: 60000,
+  sttOnlineMaxConcurrency: 2,
   agreementVersion: 0,
   activationData: '',
   logLevel: 'WARN', // 默认只记录警告和错误
@@ -317,7 +331,8 @@ export class ConfigService {
     const cachePath = String(profile.cachePath ?? fallback?.cachePath ?? '').trim()
     const imageXorKey = String(profile.imageXorKey ?? fallback?.imageXorKey ?? '').trim()
     const imageAesKey = String(profile.imageAesKey ?? fallback?.imageAesKey ?? '').trim()
-    const displayName = String(profile.displayName ?? fallback?.displayName ?? wxid || '未命名账号').trim() || wxid || '未命名账号'
+    const rawDisplayName = profile.displayName ?? fallback?.displayName ?? wxid ?? ''
+    const displayName = String(rawDisplayName).trim() || wxid || '未命名账号'
 
     return {
       wxid,

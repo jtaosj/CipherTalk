@@ -1,6 +1,6 @@
 {
   "name": "ciphertalk",
-  "version": "4.0.1",
+  "version": "4.1.1",
   "description": "密语 - 微信聊天记录查看工具",
   "author": "ILoveBingLu",
   "license": "CC-BY-NC-SA-4.0",
@@ -33,6 +33,9 @@
   "dependencies": {
     "@emotion/react": "^11.14.0",
     "@emotion/styled": "^11.14.1",
+    "@lobehub/fluent-emoji": "^4.1.0",
+    "@lobehub/icons": "^5.3.0",
+    "@lobehub/ui": "^5.6.5",
     "@modelcontextprotocol/sdk": "^1.27.1",
     "@mui/material": "^7.3.9",
     "@types/dompurify": "^3.0.5",
@@ -40,6 +43,7 @@
     "@types/react-virtualized-auto-sizer": "^1.0.4",
     "@types/react-window": "^1.8.8",
     "@xmldom/xmldom": "^0.9.6",
+    "antd": "^6.3.5",
     "better-sqlite3": "^12.5.0",
     "dom-to-image-more": "^3.7.2",
     "dompurify": "^3.3.1",
@@ -47,6 +51,7 @@
     "echarts-for-react": "^3.0.2",
     "electron-store": "^10.0.0",
     "electron-updater": "^6.3.9",
+    "es-toolkit": "^1.45.1",
     "ffmpeg-static": "^5.3.0",
     "fzstd": "^0.1.1",
     "html2canvas": "^1.4.1",
@@ -165,6 +170,10 @@
       {
         "from": ".tmp/release-announcement.json",
         "to": "release-announcement.json"
+      },
+      {
+        "from": "sikll/ct-mcp-copilot",
+        "to": "builtin-skills/ct-mcp-copilot"
       }
     ],
     "extraFiles": [
@@ -180,6 +189,7 @@
     "files": [
       "dist/**/*",
       "dist-electron/**/*",
+      "sikll/**/*",
       "!node_modules/**/*.{txt,md,js.map,ts,html}",
       "!node_modules/**/test/**/*",
       "!node_modules/**/docs/**/*",

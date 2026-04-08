@@ -1,6 +1,6 @@
 ---
 name: ct-mcp-copilot
-description: Use CipherTalk MCP as an AI copilot for contact lookup, session resolution, message search, context retrieval, and chat analytics. Trigger when the user provides partial, fuzzy, mistaken, or incomplete clues such as nicknames, remarks, organization fragments, typo-prone names, or half-remembered keywords, or wants the AI to proactively dig for more data instead of stopping after one failed query.
+description: Use CipherTalk MCP as an AI copilot for health/status checks, contact lookup, session resolution, message search, context retrieval, moments timeline exploration, chat export, and chat analytics. Trigger when the user provides partial, fuzzy, mistaken, or incomplete clues, or wants the AI to proactively dig for more local data instead of stopping after one failed query.
 ---
 
 # ct-mcp-copilot
@@ -9,20 +9,67 @@ Use CipherTalk MCP like a patient investigator, not like a rigid database client
 
 ## Core behavior
 
+0. Start with `health_check` or `get_status` whenever tool availability, DB readiness, or setup state is uncertain.
 1. Start broad, then narrow.
 2. Treat `list_contacts` and `list_sessions` as fuzzy entry points.
 3. Assume the user may remember only part of the truth.
 4. Do not stop after the first miss.
 5. When multiple candidates exist, compare them and keep shrinking the set.
 
+## Tool coverage
+
+This skill is expected to use all currently exposed CipherTalk MCP tools when relevant:
+
+- `health_check`
+- `get_status`
+- `get_moments_timeline`
+- `resolve_session`
+- `export_chat`
+- `list_sessions`
+- `get_messages`
+- `list_contacts`
+- `search_messages`
+- `get_session_context`
+- `get_global_statistics`
+- `get_contact_rankings`
+- `get_activity_distribution`
+
 ## Default routing
 
-1. If the user describes a person loosely, start with both `list_contacts` and `list_sessions`.
-2. When the clue is especially fuzzy or typo-prone, prefer `resolve_session` first to get candidates, confidence, and the recommended next action.
-3. If the target is still unclear, compare remark, nickname, display name, recent timestamp, and session kind.
-4. Once one session becomes the best candidate, switch to `get_messages` or `get_session_context`.
-5. If the user wants more clues or the session is still uncertain, use `search_messages` across multiple sessions or globally.
-6. Use analytics tools only after the target scope is reasonably stable.
+1. If readiness is unclear, start with `health_check`, then `get_status`.
+2. If the user describes a person or chat loosely, start with `list_contacts` and `list_sessions`.
+3. When the clue is especially fuzzy or typo-prone, prefer `resolve_session` first to get candidates, confidence, and the recommended next action.
+4. If the target is still unclear, compare remark, nickname, display name, recent timestamp, and session kind.
+5. Once one session becomes the best candidate, switch to `get_messages` or `get_session_context`.
+6. If the user wants more clues or the session is still uncertain, use `search_messages` across multiple sessions or globally.
+7. If the user is asking about朋友圈/动态/点赞/评论/某段时间的分享内容, switch to `get_moments_timeline`.
+8. Use analytics tools only after the target scope is reasonably stable.
+
+## Health and status routing
+
+Use `health_check` when:
+
+- the user asks whether CipherTalk MCP is alive
+- the host just connected
+- you only need a lightweight liveness check
+
+Use `get_status` when:
+
+- the user says “为什么查不到”
+- DB readiness is uncertain
+- MCP may be disabled or misconfigured
+- you need to inspect warnings or capability list
+
+When `get_status.config.dbReady === false`:
+
+- warn that data tools may fail
+- do not keep retrying content tools blindly
+- suggest finishing local DB setup before deeper queries
+
+When `get_status.warnings` is non-empty:
+
+- surface the warning briefly
+- adapt the next route instead of ignoring it
 
 ## Fuzzy clue strategy
 
@@ -99,17 +146,65 @@ After export finishes, summarize:
 - which media were included
 - where the files were written
 
+## Moments workflow
+
+When the user asks about朋友圈 / 动态 / 点赞 / 评论 / 某张图 / 某段时间谁发过什么:
+
+1. Start with `get_moments_timeline`
+2. Prefer `usernames` filter if the user already knows the poster
+3. Prefer `keyword` if the user remembers part of the caption
+4. Use `startTime/endTime` when the user implies recency or a specific period
+5. Keep `includeRaw=false` by default
+6. Use `includeRaw=true` only when structured fields are insufficient or when debugging parser gaps
+
+For moments evidence:
+
+- compare `contentDesc`
+- compare `nickname` and `username`
+- inspect `likes`
+- inspect `comments`
+- inspect `shareInfo`
+- use `rawXml` only as a fallback, not the default reading surface
+
+## Analytics workflow
+
+Use analytics tools deliberately:
+
+- `get_global_statistics`
+  - when the user asks for overall volume, first/last message, sent/received split, or total activity
+- `get_contact_rankings`
+  - when the user asks “聊得最多的是谁” or wants top contacts in a time window
+- `get_activity_distribution`
+  - when the user asks about活跃时段 / 星期分布 / 月度分布
+
+Recommended order:
+
+1. stabilize scope first
+2. choose one analytics tool that matches the question
+3. only combine multiple analytics tools when the user explicitly wants a broader report
+
+Battle report examples:
+
+- “战报：数据库已就绪，开始做总览统计。”
+- “战报：目标已明确，开始看联系人排行。”
+- “战报：聊天范围已锁定，接着看活跃时段分布。”
+
 ## Never do this
 
 - Do not conclude “没有数据” after a single failed query.
+- Do not skip `get_status` when readiness is obviously uncertain.
 - Do not insist on exact `sessionId` when fuzzy resolution is possible.
 - Do not ignore `hint` or candidate summaries returned by MCP.
 - Do not ignore `evidence` on resolved candidates or `sessionSummaries` on search results.
 - Do not lock onto a candidate while ambiguity is still obvious.
 - Do not start exporting before target session, time range, format, and media selections are all confirmed.
 - Do not quietly choose a time range or media mix on the user’s behalf.
+- Do not default to `includeRaw=true` for moments.
+- Do not use analytics tools as a first step when the user is clearly asking for a specific session or person.
 
 ## References
 
 - Read [references/queries.md](references/queries.md) when you need concrete fuzzy-query playbooks, fallback chains, or battle-report examples.
 - Read [references/export.md](references/export.md) when the user asks to export chat history.
+- Read [references/moments.md](references/moments.md) when the user asks about朋友圈、点赞、评论、转发内容或时间段动态。
+- Read [references/analytics.md](references/analytics.md) when the user asks for overall statistics, top contacts, or activity timing patterns.
