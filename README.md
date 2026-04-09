@@ -7,7 +7,7 @@
 **一款现代化的微信聊天记录查看与分析工具**
 
 [![License](https://img.shields.io/badge/license-CC--BY--NC--SA--4.0-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-4.1.0-green.svg)](package.json)
+[![Version](https://img.shields.io/badge/version-4.1.8-green.svg)](package.json)
 [![Platform](https://img.shields.io/badge/platform-Windows-0078D6.svg?logo=windows)]()
 [![Electron](https://img.shields.io/badge/Electron-39-47848F.svg?logo=electron)]()
 [![React](https://img.shields.io/badge/React-19-61DAFB.svg?logo=react)]()
@@ -367,7 +367,9 @@ macOS 打包态请直接指向 `.app` 内部的 `ciphertalk-mcp`，不要把 `Ci
 项目内置了 `ct-mcp-copilot` skill，用于让支持 Skills 的 Agent 更智能地使用 CipherTalk MCP：
 
 - 模糊联系人 / 会话查找
+- 先解析联系人真实 `contactId`，再查朋友圈时间线
 - 线索补挖和候选比较
+- 优先消费 `items[].text` / `items[].contentDesc` 等结构化字段，而不是停在 `Loaded N ...`
 - 导出前补问和请求校验
 
 在应用内的 MCP 页面可以一键安装到本机支持的 Agent：
@@ -432,6 +434,25 @@ Skill 使用独立版本号，不跟应用版本绑定。页面会显示：
 ```
 
 第一版返回朋友圈结构化时间线，不包含媒体下载或本地路径解析接口。
+
+### 关键返回字段
+
+- `list_contacts.items[].contactId`：联系人真实 username，可直接传给 `get_moments_timeline.usernames[]`
+- `get_messages.items[].text`：聊天正文
+- `get_session_context.items[].text`：最近上下文消息正文
+- `search_messages.hits[].message.text`：搜索命中的消息正文
+- `get_moments_timeline.items[].contentDesc`：朋友圈正文
+
+### 推荐查询链路示例
+
+当用户问“找找体育组张老师儿的最新三条朋友圈内容”时，推荐这样查：
+
+1. `list_contacts(q="体育组张老师儿")`
+2. 读取命中项里的 `contactId`
+3. `get_moments_timeline(usernames=["zhangjunbai"], limit=3)`
+4. 直接从 `items[*].contentDesc` 作答
+
+当前 MCP 的 `content` 也会带最多 3 条预览，便于只消费文本摘要的宿主继续工作；完整结构化结果仍保留在 `structuredContent` 中。
 
 ---
 

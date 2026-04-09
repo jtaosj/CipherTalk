@@ -74,7 +74,7 @@ const BrowserWindowPage = () => {
 
     return (
         <div className="browser-window" style={{ display: 'flex', flexDirection: 'column', height: '100vh', background: '#fff' }}>
-            <TitleBar title={pageTitle} />
+            <TitleBar className="browser-window-title-bar" title={pageTitle} variant="standalone" />
 
             {/* 简单的进度条 */}
             {isLoading && (
@@ -83,7 +83,7 @@ const BrowserWindowPage = () => {
                     background: 'var(--primary)',
                     width: '100%',
                     position: 'fixed',
-                    top: '32px', // TitleBar height
+                    top: 'var(--window-chrome-height)',
                     zIndex: 9999,
                     animation: 'loading 2s infinite linear'
                 }} />

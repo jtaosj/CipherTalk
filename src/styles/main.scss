@@ -40,6 +40,31 @@
 
   // Logo 颜色反转（浅色主题用 0，深色主题用 1）
   --logo-invert: 0;
+
+  // 独立窗口标题栏安全区
+  --window-chrome-height: 40px;
+  --window-controls-left-safe: 16px;
+  --window-controls-right-safe: 176px;
+  --window-toolbar-gap: 10px;
+}
+
+:root[data-window-platform="darwin"] {
+  --window-controls-left-safe: 84px;
+  --window-controls-right-safe: 16px;
+  --window-toolbar-gap: 8px;
+}
+
+:root[data-window-platform="linux"],
+:root[data-window-platform="win32"] {
+  --window-controls-left-safe: 16px;
+  --window-controls-right-safe: 176px;
+  --window-toolbar-gap: 10px;
+}
+
+:root[data-window-platform="linux"] {
+  --window-controls-left-safe: 16px;
+  --window-controls-right-safe: 144px;
+  --window-toolbar-gap: 10px;
 }
 
 // ==================== 浅色主题 ====================

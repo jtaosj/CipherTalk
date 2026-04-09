@@ -1,5 +1,5 @@
 {
   "name": "ct-mcp-copilot",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Use CipherTalk MCP as an AI copilot for fuzzy contact lookup, session resolution, search, context retrieval, and export follow-up questions."
 }

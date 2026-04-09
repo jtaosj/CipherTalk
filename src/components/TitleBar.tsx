@@ -1,31 +1,28 @@
-import { ReactNode, useEffect, useState } from 'react'
+import { ReactNode } from 'react'
 import { RefreshCw } from 'lucide-react'
+import { usePlatformInfo } from '../hooks/usePlatformInfo'
 import { useTitleBarStore } from '../stores/titleBarStore'
 import { useUpdateStatusStore } from '../stores/updateStatusStore'
 import { useThemeStore } from '../stores/themeStore'
 import './TitleBar.scss'
 
 interface TitleBarProps {
+  className?: string
   rightContent?: ReactNode
   title?: string
+  variant?: 'app' | 'standalone'
 }
 
-function TitleBar({ rightContent, title }: TitleBarProps) {
+function TitleBar({ className, rightContent, title, variant = 'app' }: TitleBarProps) {
   const storeRightContent = useTitleBarStore(state => state.rightContent)
   const displayContent = rightContent ?? storeRightContent
   const isUpdating = useUpdateStatusStore(state => state.isUpdating)
   const appIcon = useThemeStore(state => state.appIcon)
-  const [platform, setPlatform] = useState<'win32' | 'darwin' | 'linux'>('win32')
+  const { isMac } = usePlatformInfo()
+  const titleBarClassName = ['title-bar', `variant-${variant}`, isMac ? 'is-mac' : 'is-win', className]
+    .filter(Boolean)
+    .join(' ')
 
-  useEffect(() => {
-    void window.electronAPI.app.getPlatformInfo().then((info) => {
-      setPlatform((info.platform as 'win32' | 'darwin' | 'linux') || 'win32')
-    }).catch(() => {
-      // ignore
-    })
-  }, [])
-
-  const isMac = platform === 'darwin'
   const updateStatusNode = isUpdating ? (
     <div className="update-status">
       <RefreshCw
@@ -37,23 +34,28 @@ function TitleBar({ rightContent, title }: TitleBarProps) {
     </div>
   ) : null
 
+  const titleNode = (
+    <>
+      <img src={appIcon === 'xinnian' ? "./xinnian.png" : "./logo.png"} alt="密语" className="title-logo" />
+      <span className="titles">{title || 'CipherTalk'}</span>
+    </>
+  )
+
   return (
-    <div className={`title-bar ${isMac ? 'is-mac' : 'is-win'}`}>
+    <div className={titleBarClassName}>
       <div className="title-bar-left">
         {isMac ? (
           <div className="title-bar-traffic-spacer" aria-hidden="true" />
         ) : (
           <>
-            <img src={appIcon === 'xinnian' ? "./xinnian.png" : "./logo.png"} alt="密语" className="title-logo" />
-            <span className="titles">{title || 'CipherTalk'}</span>
+            {titleNode}
             {updateStatusNode}
           </>
         )}
       </div>
       {isMac && (
         <div className="title-bar-center">
-          <img src={appIcon === 'xinnian' ? "./xinnian.png" : "./logo.png"} alt="密语" className="title-logo" />
-          <span className="titles">{title || 'CipherTalk'}</span>
+          {titleNode}
         </div>
       )}
       <div className="title-bar-right">

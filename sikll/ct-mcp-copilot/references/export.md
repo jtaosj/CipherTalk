@@ -4,6 +4,8 @@
 
 Turn vague export requests into a complete, executable export plan.
 
+Export is a fallback when the user explicitly wants files, or when content tools truly returned no usable rows. It is not the default workaround for short tool summaries.
+
 ## Required fields before exporting
 
 Do not export until all of these are known:

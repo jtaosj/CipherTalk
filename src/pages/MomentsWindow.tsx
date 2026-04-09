@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { Loader2, RefreshCw, Search, Calendar, User, X, Filter, AlertTriangle, Play, Download, Heart, Copy, Link, Music, FileDown, ArrowUp } from 'lucide-react'
+import { Loader2, RefreshCw, Search, Calendar, User, X, Filter, AlertTriangle, Play, Download, Heart, Copy, Link, Music, FileDown, ArrowUp, ChevronLeft, ChevronRight } from 'lucide-react'
 import { ImagePreview } from '../components/ImagePreview'
 import { LivePhotoIcon } from '../components/LivePhotoIcon'
 import { parseWechatEmoji, parseWechatEmojiHtml } from '../utils/wechatEmoji'
@@ -1534,23 +1534,14 @@ document.querySelectorAll('.vi video').forEach(function(v) {
   return (
     <div className="moments-window">
       <TitleBar
+        className="moments-title-bar"
         title="朋友圈"
+        variant="standalone"
         rightContent={
           <div className="title-actions">
-            <button className="export-btn" onClick={() => setShowExportOptions(true)}>
+            <button className="export-btn" onClick={() => setShowExportOptions(true)} data-tooltip="导出">
               <FileDown size={14} />
               <span>导出</span>
-            </button>
-            <div className="divider"></div>
-            <button
-              className={`icon-btn ${isSidebarOpen ? 'active' : ''}`}
-              onClick={() => setIsSidebarOpen(!isSidebarOpen)}
-              data-tooltip={isSidebarOpen ? "收起筛选" : "打开筛选"}
-            >
-              <Filter size={16} />
-            </button>
-            <button onClick={() => loadPosts({ reset: true })} disabled={isLoading} className="refresh-btn" data-tooltip="刷新">
-              <RefreshCw size={16} className={isLoading ? 'spinning' : ''} />
             </button>
           </div>
         }
@@ -1559,101 +1550,133 @@ document.querySelectorAll('.vi video').forEach(function(v) {
       <div className="moments-container">
         {/* 侧边栏 (左侧) */}
         <aside className={`sns-sidebar ${isSidebarOpen ? 'open' : 'closed'}`}>
-          <div className="filter-content custom-scrollbar">
-            {/* 1. 搜索 */}
-            <div className="filter-card">
-              <div className="filter-section">
-                <label><Search size={14} /> 关键词搜索</label>
-                <div className="search-input-wrapper">
-                  <Search size={14} className="input-icon" />
-                  <input
-                    type="text"
-                    placeholder="搜索动态内容..."
-                    value={searchKeyword}
-                    onChange={e => setSearchKeyword(e.target.value)}
-                  />
-                  {searchKeyword && (
-                    <button className="clear-input" onClick={() => setSearchKeyword('')}>
-                      <X size={14} />
-                    </button>
-                  )}
+          <div className="sidebar-toolbar">
+            {isSidebarOpen && (
+              <div className="sidebar-toolbar-title">
+                <Filter size={14} />
+                <span>筛选</span>
+              </div>
+            )}
+            <div className="sidebar-toolbar-actions">
+              <button
+                className="sidebar-tool-btn"
+                onClick={() => loadPosts({ reset: true })}
+                disabled={isLoading}
+                data-tooltip="刷新"
+                aria-label="刷新朋友圈"
+              >
+                <RefreshCw size={16} className={isLoading ? 'spinning' : ''} />
+              </button>
+              <button
+                className={`sidebar-tool-btn sidebar-toggle-btn ${isSidebarOpen ? 'active' : ''}`}
+                onClick={() => setIsSidebarOpen(!isSidebarOpen)}
+                data-tooltip={isSidebarOpen ? '收起筛选' : '展开筛选'}
+                aria-label={isSidebarOpen ? '收起筛选' : '展开筛选'}
+              >
+                {isSidebarOpen ? <ChevronLeft size={16} /> : <ChevronRight size={16} />}
+              </button>
+            </div>
+          </div>
+
+          {isSidebarOpen && (
+            <>
+              <div className="filter-content custom-scrollbar">
+                {/* 1. 搜索 */}
+                <div className="filter-card">
+                  <div className="filter-section">
+                    <label><Search size={14} /> 关键词搜索</label>
+                    <div className="search-input-wrapper">
+                      <Search size={14} className="input-icon" />
+                      <input
+                        type="text"
+                        placeholder="搜索动态内容..."
+                        value={searchKeyword}
+                        onChange={e => setSearchKeyword(e.target.value)}
+                      />
+                      {searchKeyword && (
+                        <button className="clear-input" onClick={() => setSearchKeyword('')}>
+                          <X size={14} />
+                        </button>
+                      )}
+                    </div>
+                  </div>
                 </div>
-              </div>
-            </div>
 
-            {/* 2. 日期 */}
-            <div className="filter-card jump-date-card">
-              <div className="filter-section">
-                <label><Calendar size={14} /> 时间跳转</label>
-                <button className={`jump-date-btn ${jumpTargetDate ? 'active' : ''}`} onClick={() => setShowJumpDialog(true)}>
-                  <span className="text">
-                    {jumpTargetDate ? jumpTargetDate.toLocaleDateString('zh-CN', { year: 'numeric', month: 'long', day: 'numeric' }) : '选择跳转日期...'}
-                  </span>
-                  <Calendar size={14} className="icon" />
-                </button>
-                {jumpTargetDate && (
-                  <button className="clear-jump-date-inline" onClick={() => setJumpTargetDate(undefined)}>
-                    返回最新动态
-                  </button>
-                )}
-              </div>
-            </div>
-
-            {/* 3. 联系人 */}
-            <div className="filter-card contact-card">
-              <div className="contact-filter-section">
-                <div className="section-header">
-                  <label><User size={14} /> 联系人</label>
-                  <div className="header-actions">
-                    {selectedUsernames.length > 0 && (
-                      <button className="clear-selection-btn" onClick={() => setSelectedUsernames([])}>清除</button>
-                    )}
-                    {selectedUsernames.length > 0 && (
-                      <span className="selected-count">{selectedUsernames.length}</span>
+                {/* 2. 日期 */}
+                <div className="filter-card jump-date-card">
+                  <div className="filter-section">
+                    <label><Calendar size={14} /> 时间跳转</label>
+                    <button className={`jump-date-btn ${jumpTargetDate ? 'active' : ''}`} onClick={() => setShowJumpDialog(true)}>
+                      <span className="text">
+                        {jumpTargetDate ? jumpTargetDate.toLocaleDateString('zh-CN', { year: 'numeric', month: 'long', day: 'numeric' }) : '选择跳转日期...'}
+                      </span>
+                      <Calendar size={14} className="icon" />
+                    </button>
+                    {jumpTargetDate && (
+                      <button className="clear-jump-date-inline" onClick={() => setJumpTargetDate(undefined)}>
+                        返回最新动态
+                      </button>
                     )}
                   </div>
                 </div>
-                <div className="contact-search">
-                  <Search size={12} className="search-icon" />
-                  <input
-                    type="text"
-                    placeholder="搜索好友..."
-                    value={contactSearch}
-                    onChange={e => setContactSearch(e.target.value)}
-                  />
-                  {contactSearch && (
-                    <X size={12} className="clear-search-icon" onClick={() => setContactSearch('')} />
-                  )}
-                </div>
-                <div className="contact-list custom-scrollbar">
-                  {filteredContacts.map(contact => (
-                    <div
-                      key={contact.username}
-                      className={`contact-item ${selectedUsernames.includes(contact.username) ? 'active' : ''}`}
-                      onClick={() => toggleUserSelection(contact.username)}
-                    >
-                      <div className="avatar-wrapper">
-                        {contact.avatarUrl ? <img src={contact.avatarUrl} alt="" /> : <div className="avatar-placeholder">{contact.displayName[0]}</div>}
-                        {selectedUsernames.includes(contact.username) && (
-                          <div className="active-badge"></div>
+
+                {/* 3. 联系人 */}
+                <div className="filter-card contact-card">
+                  <div className="contact-filter-section">
+                    <div className="section-header">
+                      <label><User size={14} /> 联系人</label>
+                      <div className="header-actions">
+                        {selectedUsernames.length > 0 && (
+                          <button className="clear-selection-btn" onClick={() => setSelectedUsernames([])}>清除</button>
+                        )}
+                        {selectedUsernames.length > 0 && (
+                          <span className="selected-count">{selectedUsernames.length}</span>
                         )}
                       </div>
-                      <span className="contact-name">{contact.displayName}</span>
                     </div>
-                  ))}
-                  {filteredContacts.length === 0 && (
-                    <div className="empty-contacts">无可显示联系人</div>
-                  )}
+                    <div className="contact-search">
+                      <Search size={12} className="search-icon" />
+                      <input
+                        type="text"
+                        placeholder="搜索好友..."
+                        value={contactSearch}
+                        onChange={e => setContactSearch(e.target.value)}
+                      />
+                      {contactSearch && (
+                        <X size={12} className="clear-search-icon" onClick={() => setContactSearch('')} />
+                      )}
+                    </div>
+                    <div className="contact-list custom-scrollbar">
+                      {filteredContacts.map(contact => (
+                        <div
+                          key={contact.username}
+                          className={`contact-item ${selectedUsernames.includes(contact.username) ? 'active' : ''}`}
+                          onClick={() => toggleUserSelection(contact.username)}
+                        >
+                          <div className="avatar-wrapper">
+                            {contact.avatarUrl ? <img src={contact.avatarUrl} alt="" /> : <div className="avatar-placeholder">{contact.displayName[0]}</div>}
+                            {selectedUsernames.includes(contact.username) && (
+                              <div className="active-badge"></div>
+                            )}
+                          </div>
+                          <span className="contact-name">{contact.displayName}</span>
+                        </div>
+                      ))}
+                      {filteredContacts.length === 0 && (
+                        <div className="empty-contacts">无可显示联系人</div>
+                      )}
+                    </div>
+                  </div>
                 </div>
               </div>
-            </div>
-          </div>
-          <div className="sidebar-footer">
-            <button className="clear-btn" onClick={clearFilters}>
-              <RefreshCw size={14} />
-              重置所有筛选
-            </button>
-          </div>
+              <div className="sidebar-footer">
+                <button className="clear-btn" onClick={clearFilters}>
+                  <RefreshCw size={14} />
+                  重置所有筛选
+                </button>
+              </div>
+            </>
+          )}
         </aside>
 
         {/* 主内容区 */}

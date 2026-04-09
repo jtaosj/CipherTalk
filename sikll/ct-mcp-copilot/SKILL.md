@@ -15,6 +15,7 @@ Use CipherTalk MCP like a patient investigator, not like a rigid database client
 3. Assume the user may remember only part of the truth.
 4. Do not stop after the first miss.
 5. When multiple candidates exist, compare them and keep shrinking the set.
+6. Always answer from structured fields first. Only mention “the host may have shown only a summary” when fields like `items[].text`, `hits[].message.text`, or `items[].contentDesc` are truly absent.
 
 ## Tool coverage
 
@@ -40,10 +41,11 @@ This skill is expected to use all currently exposed CipherTalk MCP tools when re
 2. If the user describes a person or chat loosely, start with `list_contacts` and `list_sessions`.
 3. When the clue is especially fuzzy or typo-prone, prefer `resolve_session` first to get candidates, confidence, and the recommended next action.
 4. If the target is still unclear, compare remark, nickname, display name, recent timestamp, and session kind.
-5. Once one session becomes the best candidate, switch to `get_messages` or `get_session_context`.
+5. For “latest chat” or “recent messages”, prefer `get_session_context(mode="latest")`. Use `get_messages` only when the user clearly needs explicit pagination, sort order, or keyword/time filtering.
 6. If the user wants more clues or the session is still uncertain, use `search_messages` across multiple sessions or globally.
-7. If the user is asking about朋友圈/动态/点赞/评论/某段时间的分享内容, switch to `get_moments_timeline`.
-8. Use analytics tools only after the target scope is reasonably stable.
+7. If the user is asking about朋友圈/动态/点赞/评论/某段时间的分享内容 and the clue is a person name / remark / nickname, resolve the poster first with `list_contacts(q=<clue>)`, then pass `items[].contactId` into `get_moments_timeline.usernames[]`.
+8. Use `get_moments_timeline(keyword=<clue>)` first only when the clue is about the post body or topic, not the poster identity.
+9. Use analytics tools only after the target scope is reasonably stable.
 
 ## Health and status routing
 
@@ -103,6 +105,14 @@ When `search_messages` returns global or multi-session hits:
 - Use `sessionSummaries` to see which session is accumulating the strongest evidence.
 - Use `sampleExcerpts` to decide whether to keep narrowing, switch sessions, or confirm the lead.
 
+When content tools already returned rows:
+
+- read `get_messages.items[*].text`
+- read `get_session_context.items[*].text`
+- read `search_messages.hits[*].message.text`
+- read `get_moments_timeline.items[*].contentDesc`
+- answer with those fields directly instead of restating tool counts
+
 ## Battle report
 
 After each meaningful exploration round, produce a very short battle report for yourself or the user:
@@ -112,8 +122,11 @@ After each meaningful exploration round, produce a very short battle report for 
 - “战报：已确认目标会话，开始拉最近上下文。”
 
 Keep it short. It should help trace the reasoning, not overshadow the answer.
+Never let the battle report replace the actual answer once the content is already available.
 
 ## Export workflow
+
+Export is a last resort, not a default detour.
 
 When the user asks to export chat history:
 
@@ -130,6 +143,11 @@ When the user asks to export chat history:
 7. Prefer the configured default export directory when it exists and is writable.
 8. If the default export directory is unavailable, ask the user for an output directory.
 9. Only call `export_chat` without `validateOnly` after the request is complete.
+
+When the user did not ask to export:
+
+- do not jump to `export_chat` just because a host UI displayed a short text summary
+- use export only if content tools truly returned empty arrays or the user explicitly requests an export artifact
 
 When asking follow-up questions for export:
 
@@ -150,12 +168,21 @@ After export finishes, summarize:
 
 When the user asks about朋友圈 / 动态 / 点赞 / 评论 / 某张图 / 某段时间谁发过什么:
 
-1. Start with `get_moments_timeline`
-2. Prefer `usernames` filter if the user already knows the poster
-3. Prefer `keyword` if the user remembers part of the caption
-4. Use `startTime/endTime` when the user implies recency or a specific period
-5. Keep `includeRaw=false` by default
-6. Use `includeRaw=true` only when structured fields are insufficient or when debugging parser gaps
+1. If the clue is a person name / remark / nickname, start with `list_contacts(q=<clue>)`.
+2. Use the matched `items[].contactId` as `get_moments_timeline.usernames[]`.
+3. Treat `get_moments_timeline(limit=N)` as “latest N posts”.
+4. Use `keyword` first only when the user remembers caption/topic text rather than the poster identity.
+5. If `keyword` search returns multiple posters, read `nickname/username`, lock the poster, then re-run `get_moments_timeline(usernames=[...], limit=N)` before answering.
+6. Add `startTime/endTime` when the user implies recency or a specific period.
+7. Keep `includeRaw=false` by default.
+8. Use `includeRaw=true` only when structured fields are insufficient or when debugging parser gaps.
+
+Example:
+
+- user asks “找找体育组张老师儿的最新三条朋友圈内容”
+- first call `list_contacts(q="体育组张老师儿")`
+- then call `get_moments_timeline(usernames=["zhangjunbai"], limit=3)`
+- answer from `items[*].contentDesc`
 
 For moments evidence:
 
@@ -197,10 +224,14 @@ Battle report examples:
 - Do not ignore `hint` or candidate summaries returned by MCP.
 - Do not ignore `evidence` on resolved candidates or `sessionSummaries` on search results.
 - Do not lock onto a candidate while ambiguity is still obvious.
+- Do not pass a human clue like “体育组张老师儿” directly into `get_moments_timeline.usernames[]`; resolve the real `contactId` first.
+- Do not use `keyword` as the first moments filter when the user actually gave you a poster clue.
+- Do not claim “the MCP only returned Loaded N ...” before checking the structured fields.
 - Do not start exporting before target session, time range, format, and media selections are all confirmed.
 - Do not quietly choose a time range or media mix on the user’s behalf.
 - Do not default to `includeRaw=true` for moments.
 - Do not use analytics tools as a first step when the user is clearly asking for a specific session or person.
+- Do not use export as the default workaround when content tools already returned usable rows.
 
 ## References
 

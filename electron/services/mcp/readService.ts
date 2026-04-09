@@ -1682,7 +1682,9 @@ export class McpReadService {
       throw new McpToolError('INTERNAL_ERROR', result.error || 'Failed to load moments timeline.')
     }
 
-    const rawItems = result.timeline || []
+    const rawItems = (result.timeline || []).slice().sort((a, b) =>
+      Number(b.createTime || 0) - Number(a.createTime || 0)
+    )
     return {
       items: rawItems.map((item) => toMomentItem(item, includeRaw)),
       offset,

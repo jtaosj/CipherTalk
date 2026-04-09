@@ -36,6 +36,7 @@ import { initTldList } from './utils/linkify'
 import LockScreen from './pages/LockScreen'
 import { useAuthStore } from './stores/authStore'
 import { X, Shield, Loader2 } from 'lucide-react'
+import { applyWindowChromeToDocument, syncWindowControlsOverlayToDocument } from './utils/windowChrome'
 import './App.scss'
 
 type AppUpdateInfo = {
@@ -118,6 +119,47 @@ function App() {
     // 初始化认证状态
     initAuth()
   }, [loadTheme])
+
+  useEffect(() => {
+    let cancelled = false
+    let removeOverlayListeners: (() => void) | undefined
+
+    const bindPlatformChrome = (platform?: string) => {
+      const syncPlatformChrome = () => {
+        if (cancelled) return
+        applyWindowChromeToDocument(platform)
+        syncWindowControlsOverlayToDocument(platform)
+      }
+
+      syncPlatformChrome()
+
+      const overlay = navigator.windowControlsOverlay
+      if (!overlay) {
+        return
+      }
+
+      overlay.addEventListener('geometrychange', syncPlatformChrome)
+      window.addEventListener('resize', syncPlatformChrome)
+
+      removeOverlayListeners = () => {
+        overlay.removeEventListener('geometrychange', syncPlatformChrome)
+        window.removeEventListener('resize', syncPlatformChrome)
+      }
+    }
+
+    void window.electronAPI.app.getPlatformInfo().then((info) => {
+      if (cancelled) return
+      bindPlatformChrome(info.platform)
+    }).catch(() => {
+      if (cancelled) return
+      bindPlatformChrome('win32')
+    })
+
+    return () => {
+      cancelled = true
+      removeOverlayListeners?.()
+    }
+  }, [])
 
   // 应用主题
   useEffect(() => {

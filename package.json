@@ -1,6 +1,6 @@
 {
   "name": "ciphertalk",
-  "version": "4.1.1",
+  "version": "4.1.8",
   "description": "密语 - 微信聊天记录查看工具",
   "author": "ILoveBingLu",
   "license": "CC-BY-NC-SA-4.0",
@@ -194,6 +194,7 @@
       "!node_modules/**/test/**/*",
       "!node_modules/**/docs/**/*",
       "!node_modules/**/examples/**/*",
+      "!node_modules/.vite/**/*",
       "!node_modules/**/{linux,darwin,mac,android,ios,armhf,armv7l,ia32,wasm}/**/*",
       "!node_modules/**/*.so",
       "!node_modules/**/*.dylib",

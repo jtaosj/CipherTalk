@@ -1,10 +1,33 @@
 const path = require('path')
 
+function parseToolArgs(raw) {
+  if (!raw) return {}
+  try {
+    const parsed = JSON.parse(raw)
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      throw new Error('Tool arguments must be a JSON object.')
+    }
+    return parsed
+  } catch (error) {
+    throw new Error(`Invalid tool arguments JSON: ${String(error.message || error)}`)
+  }
+}
+
+function extractContentText(content) {
+  if (!Array.isArray(content)) return ''
+  return content
+    .map((item) => typeof item?.text === 'string' ? item.text : '')
+    .filter(Boolean)
+    .join('\n')
+}
+
 async function main() {
   const { Client } = await import('@modelcontextprotocol/sdk/client/index.js')
   const { StdioClientTransport } = await import('@modelcontextprotocol/sdk/client/stdio.js')
 
   const mode = process.argv[2] || 'dev'
+  const toolName = process.argv[3] || ''
+  const toolArgs = parseToolArgs(process.argv[4] || '')
   const cwd = process.cwd()
   let command
   let args
@@ -39,12 +62,28 @@ async function main() {
   try {
     await client.connect(transport)
     const tools = await client.listTools()
-    const health = await client.callTool({ name: 'health_check', arguments: {} })
+    const toolNames = (tools.tools || []).map((tool) => tool.name)
 
+    if (!toolName) {
+      const health = await client.callTool({ name: 'health_check', arguments: {} })
+      console.log(JSON.stringify({
+        mode,
+        tools: toolNames,
+        health
+      }, null, 2))
+      return
+    }
+
+    const result = await client.callTool({ name: toolName, arguments: toolArgs })
     console.log(JSON.stringify({
       mode,
-      tools: (tools.tools || []).map((tool) => tool.name),
-      health
+      tools: toolNames,
+      toolName,
+      arguments: toolArgs,
+      summaryText: extractContentText(result.content),
+      content: result.content,
+      structuredContent: result.structuredContent,
+      isError: result.isError
     }, null, 2))
   } finally {
     await client.close()

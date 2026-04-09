@@ -804,10 +804,14 @@
   position: fixed;
   top: 0;
   left: 0;
-  right: 138px;
-  height: 32px;
+  right: var(--window-controls-right-safe);
+  height: var(--window-chrome-height);
   -webkit-app-region: drag !important;
   z-index: 100;
+}
+
+html[data-window-platform="darwin"] .annual-report-window .drag-region {
+  left: var(--window-controls-left-safe);
 }
 
 // 浮动操作按钮

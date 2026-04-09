@@ -8,11 +8,12 @@
     user-select: none;
 
     .title-bar {
-        height: 40px;
-        min-height: 40px;
+        height: var(--window-chrome-height);
+        min-height: var(--window-chrome-height);
         display: flex;
         background: #1a1a1a;
-        padding-right: 140px;
+        padding-left: var(--window-controls-left-safe);
+        padding-right: var(--window-controls-right-safe);
         position: relative;
         z-index: 10;
 

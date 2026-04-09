@@ -105,14 +105,22 @@ Example:
 
 - “查下他朋友圈最近发了什么”
 - “看下谁给这条朋友圈点过赞”
+- “找找体育组张老师儿的最新三条朋友圈内容”
 
 Use this order:
 
-1. `get_moments_timeline`
-2. Add `usernames` when poster is known
-3. Add `keyword` when caption clue exists
+1. If the clue is a person identity, run `list_contacts(q=<clue>)`
+2. Read the best hit’s `items[].contactId`
+3. Call `get_moments_timeline(usernames=[contactId], limit=<N>)`
 4. Add `startTime/endTime` when period clue exists
-5. Keep `includeRaw=false` unless debugging parser gaps
+5. Use `keyword` first only when the clue is about post body text rather than the poster identity
+6. Keep `includeRaw=false` unless debugging parser gaps
+
+When answering:
+
+- read `items[*].contentDesc`
+- if `keyword` search surfaced multiple posters, lock the target `username` and re-run the query by `usernames=[...]`
+- do not stop at “Loaded N moments posts” when rows are present
 
 Battle report:
 
@@ -136,6 +144,7 @@ When the evidence is strong:
 - state the likely target directly
 - mention the evidence briefly
 - prefer quoting `resolve_session.evidence` or `sessionSummaries` over hand-wavy justification
+- when content rows are already present, answer from `items[*].text` / `items[*].contentDesc` instead of summarizing tool counts
 
 When the evidence is mixed:
 

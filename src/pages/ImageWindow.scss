@@ -9,14 +9,15 @@
     // -webkit-app-region: drag; // Removed global drag to prevent unwanted resize/drag behaviors
 
     .title-bar {
-        height: 40px;
-        min-height: 40px;
+        height: var(--window-chrome-height);
+        min-height: var(--window-chrome-height);
         display: flex;
         justify-content: space-between;
         align-items: center;
         background: var(--bg-secondary);
         border-bottom: 1px solid var(--border-color);
-        padding-right: 140px; // 为原生窗口控件留出空间
+        padding-left: var(--window-controls-left-safe);
+        padding-right: var(--window-controls-right-safe);
         -webkit-app-region: drag; // Only title bar is natively draggable
         z-index: 500; // Even higher to stay above image content
         position: relative;
@@ -30,9 +31,8 @@
         .title-bar-controls {
             display: flex;
             align-items: center;
-            gap: 8px;
+            gap: var(--window-toolbar-gap);
             -webkit-app-region: no-drag;
-            margin-right: 16px;
 
             button {
                 background: transparent;

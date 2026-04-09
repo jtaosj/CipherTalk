@@ -153,7 +153,7 @@ export default function ChatHistoryPage() {
 
     return (
         <div className="chat-history-page">
-            <TitleBar title={title} />
+            <TitleBar className="chat-history-title-bar" title={title} variant="standalone" />
             <div className="history-list">
                 {loading ? (
                     <div className="status-msg">加载中...</div>

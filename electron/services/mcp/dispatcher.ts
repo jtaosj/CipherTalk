@@ -1,3 +1,4 @@
+import { buildToolResultText } from './presentation'
 import { getMcpConfigSnapshot, getMcpHealthPayload, getMcpStatusPayload } from './runtime'
 import { McpReadService } from './readService'
 import type { McpStreamPartialPayloadMap, McpStreamProgressPayload, McpToolName } from './types'
@@ -25,16 +26,11 @@ export async function executeMcpTool(
     }
     case 'get_moments_timeline': {
       const payload = await readService.getMomentsTimeline(args as any)
-      return { summary: `Loaded ${payload.items.length} moments posts.`, payload }
+      return { summary: buildToolResultText('get_moments_timeline', payload), payload }
     }
     case 'resolve_session': {
       const payload = await readService.resolveSession(args as any, reporter)
-      return {
-        summary: payload.recommended
-          ? `Resolved ${payload.query} to ${payload.recommended.displayName}.`
-          : `Found ${payload.candidates.length} candidates for ${payload.query}.`,
-        payload
-      }
+      return { summary: buildToolResultText('resolve_session', payload), payload }
     }
     case 'export_chat': {
       const payload = await readService.exportChat(args as any, reporter)
@@ -63,26 +59,26 @@ export async function executeMcpTool(
     }
     case 'list_sessions': {
       const payload = await readService.listSessions(args as any, reporter)
-      return { summary: `Loaded ${payload.items.length} sessions.`, payload }
+      return { summary: buildToolResultText('list_sessions', payload), payload }
     }
     case 'get_messages': {
       const defaults = getMcpConfigSnapshot()
       const payload = await readService.getMessages(args as any, defaults.mcpExposeMediaPaths, reporter)
-      return { summary: `Loaded ${payload.items.length} messages.`, payload }
+      return { summary: buildToolResultText('get_messages', payload), payload }
     }
     case 'list_contacts': {
       const payload = await readService.listContacts(args as any, reporter)
-      return { summary: `Loaded ${payload.items.length} contacts.`, payload }
+      return { summary: buildToolResultText('list_contacts', payload), payload }
     }
     case 'search_messages': {
       const defaults = getMcpConfigSnapshot()
       const payload = await readService.searchMessages(args as any, defaults.mcpExposeMediaPaths, reporter)
-      return { summary: `Loaded ${payload.hits.length} message hits.`, payload }
+      return { summary: buildToolResultText('search_messages', payload), payload }
     }
     case 'get_session_context': {
       const defaults = getMcpConfigSnapshot()
       const payload = await readService.getSessionContext(args as any, defaults.mcpExposeMediaPaths, reporter)
-      return { summary: `Loaded ${payload.items.length} context messages.`, payload }
+      return { summary: buildToolResultText('get_session_context', payload), payload }
     }
     default:
       throw new Error(`Unsupported MCP tool: ${toolName satisfies never}`)
