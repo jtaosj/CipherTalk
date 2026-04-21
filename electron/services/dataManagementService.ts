@@ -1042,7 +1042,7 @@ class DataManagementService {
       let successCount = 0
       let failCount = 0
       const totalFiles = pendingImages.length
-      const aesKeyBuffer = aesKeyStr ? imageDecryptService.asciiKey16(String(aesKeyStr)) : Buffer.alloc(16)
+      const aesKeyText = aesKeyStr ? String(aesKeyStr) : undefined
 
       // 分批处理，每批 50 个，避免内存溢出
       const BATCH_SIZE = 50
@@ -1067,7 +1067,7 @@ class DataManagementService {
           const outputRelativePath = relativePath.replace(/\.dat$/, '')
 
           // 解密图片
-          const decrypted = imageDecryptService.decryptDatFile(img.filePath, xorKey, aesKeyBuffer)
+          const decrypted = imageDecryptService.decryptDatFile(img.filePath, xorKey, aesKeyText)
 
           // 检测图片格式
           const ext = this.detectImageFormat(decrypted)
@@ -1213,14 +1213,14 @@ class DataManagementService {
       const outputRelativePath = relativePath.replace(/\.dat$/, '')
 
       // 解密图片
-      const aesKeyBuffer = aesKeyStr ? imageDecryptService.asciiKey16(String(aesKeyStr)) : undefined
+      const aesKeyText = aesKeyStr ? String(aesKeyStr) : undefined
       console.log('解密图片:', filePath)
       console.log('XOR Key:', xorKey.toString(16))
       console.log('AES Key String:', aesKeyStr)
       console.log('AES Key Buffer:', aesKeyBuffer?.toString('hex'))
       console.log('图片版本:', imageDecryptService.getDatVersion(filePath))
 
-      const decrypted = imageDecryptService.decryptDatFile(filePath, xorKey, aesKeyBuffer || Buffer.alloc(16))
+      const decrypted = imageDecryptService.decryptDatFile(filePath, xorKey, aesKeyText)
 
       // 检测图片格式
       const ext = this.detectImageFormat(decrypted)

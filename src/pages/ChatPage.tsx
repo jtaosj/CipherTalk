@@ -270,6 +270,10 @@ function ChatPage(_props: ChatPageProps) {
   const searchInputRef = useRef<HTMLInputElement>(null)
   const sidebarRef = useRef<HTMLDivElement>(null)
   const messagesRef = useRef<Message[]>([])
+  const isLoadingMoreRef = useRef(false)
+  const lastScrollTopRef = useRef(0)
+  const scrollToBottomAfterRenderRef = useRef(false)
+  const scrollRestoreTimersRef = useRef<number[]>([])
   const currentSessionIdRef = useRef<string | null>(null)
   const lastUpdateTimeRef = useRef<number>(0)
   const updateTimerRef = useRef<NodeJS.Timeout | null>(null)
@@ -353,6 +357,87 @@ function ChatPage(_props: ChatPageProps) {
     setTopToast({ text, success })
     setTimeout(() => setTopToast(null), 2000)
   }, [])
+
+  useEffect(() => {
+    isLoadingMoreRef.current = isLoadingMore
+  }, [isLoadingMore])
+
+  const getMessageDomKey = useCallback((message: Message): string => {
+    return [
+      message.serverId ?? '',
+      message.localId ?? '',
+      message.createTime ?? '',
+      message.sortSeq ?? ''
+    ].join('-')
+  }, [])
+
+  const findMessageWrapperByKey = useCallback((listEl: HTMLElement, key: string): HTMLElement | null => {
+    const wrappers = Array.from(listEl.querySelectorAll<HTMLElement>('.message-wrapper[data-message-key]'))
+    return wrappers.find(el => el.dataset.messageKey === key) || null
+  }, [])
+
+  const captureScrollAnchor = useCallback((): { key: string; top: number } | null => {
+    const listEl = messageListRef.current
+    if (!listEl) return null
+
+    const listRect = listEl.getBoundingClientRect()
+    const wrappers = Array.from(listEl.querySelectorAll<HTMLElement>('.message-wrapper[data-message-key]'))
+    const anchorEl = wrappers.find((el) => {
+      const rect = el.getBoundingClientRect()
+      return rect.bottom >= listRect.top + 12
+    })
+
+    const key = anchorEl?.dataset.messageKey
+    if (!anchorEl || !key) return null
+
+    return {
+      key,
+      top: anchorEl.getBoundingClientRect().top - listRect.top
+    }
+  }, [])
+
+  const clearScrollRestoreTimers = useCallback(() => {
+    for (const timer of scrollRestoreTimersRef.current) {
+      window.clearTimeout(timer)
+    }
+    scrollRestoreTimersRef.current = []
+  }, [])
+
+  const restoreScrollAnchor = useCallback((anchor: { key: string; top: number } | null) => {
+    if (!anchor) return
+
+    clearScrollRestoreTimers()
+
+    const restore = () => {
+      const listEl = messageListRef.current
+      if (!listEl) return
+      const anchorEl = findMessageWrapperByKey(listEl, anchor.key)
+      if (!anchorEl) return
+
+      const listTop = listEl.getBoundingClientRect().top
+      const currentTop = anchorEl.getBoundingClientRect().top - listTop
+      const delta = currentTop - anchor.top
+      if (Math.abs(delta) > 1) {
+        listEl.scrollTop += delta
+      }
+    }
+
+    requestAnimationFrame(() => {
+      restore()
+      scrollRestoreTimersRef.current = [
+        window.setTimeout(() => {
+          restore()
+          isLoadingMoreRef.current = false
+        }, 150)
+      ]
+    })
+  }, [clearScrollRestoreTimers, findMessageWrapperByKey])
+
+  useEffect(() => {
+    return () => {
+      clearScrollRestoreTimers()
+    }
+  }, [clearScrollRestoreTimers])
 
   const copyText = useCallback(async (text: string) => {
     try {
@@ -568,11 +653,12 @@ function ChatPage(_props: ChatPageProps) {
       // 标记用户正在操作（首次加载）
       isUserOperatingRef.current = true
     } else {
+      if (isLoadingMoreRef.current) return
+      isLoadingMoreRef.current = true
       setLoadingMore(true)
     }
 
-    // 记录加载前的第一条消息元素
-    const firstMsgEl = listEl?.querySelector('.message-wrapper') as HTMLElement | null
+    const anchor = offset > 0 ? captureScrollAnchor() : null
 
     try {
       // 确保连接已建立（如果未连接，先连接）
@@ -590,18 +676,10 @@ function ChatPage(_props: ChatPageProps) {
       if (result.success && result.messages) {
         if (offset === 0) {
           setMessages(result.messages)
-          // 首次加载滚动到底部 (瞬间)
-          requestAnimationFrame(() => {
-            scrollToBottom(false)
-          })
+          scrollToBottomAfterRenderRef.current = true
         } else {
           appendMessages(result.messages, true)
-          // 加载更多后保持位置：让之前的第一条消息保持在原来的视觉位置
-          if (firstMsgEl && listEl) {
-            requestAnimationFrame(() => {
-              listEl.scrollTop = firstMsgEl.offsetTop - 80
-            })
-          }
+          restoreScrollAnchor(anchor)
         }
         setHasMoreMessages(result.hasMore ?? false)
         setCurrentOffset(offset + result.messages.length)
@@ -611,6 +689,9 @@ function ChatPage(_props: ChatPageProps) {
     } finally {
       setLoadingMessages(false)
       setLoadingMore(false)
+      if (offset > 0) {
+        isLoadingMoreRef.current = false
+      }
       // 加载完成后，延迟重置用户操作标记（给一点缓冲时间）
       if (offset === 0) {
         setTimeout(() => {
@@ -714,11 +795,11 @@ function ChatPage(_props: ChatPageProps) {
 
   // 滚动加载更多 + 显示/隐藏回到底部按钮
   const loadMoreMessagesInDateJumpMode = useCallback(async () => {
-    if (!currentSessionId || dateJumpCursorSortSeq === null || isLoadingMore || !hasMoreMessages) return
+    if (!currentSessionId || dateJumpCursorSortSeq === null || isLoadingMoreRef.current || !hasMoreMessages) return
 
-    const listEl = messageListRef.current
-    const firstMsgEl = listEl?.querySelector('.message-wrapper') as HTMLElement | null
+    const anchor = captureScrollAnchor()
 
+    isLoadingMoreRef.current = true
     setLoadingMore(true)
     try {
       const result = await window.electronAPI.chat.getMessagesBefore(
@@ -756,11 +837,7 @@ function ChatPage(_props: ChatPageProps) {
           setHasMoreMessages(result.hasMore ?? false)
         }
 
-        if (firstMsgEl && listEl) {
-          requestAnimationFrame(() => {
-            listEl.scrollTop = firstMsgEl.offsetTop - 80
-          })
-        }
+        restoreScrollAnchor(anchor)
       } else {
         setHasMoreMessages(false)
       }
@@ -768,22 +845,24 @@ function ChatPage(_props: ChatPageProps) {
       console.error('日期跳转模式加载更多失败:', e)
     } finally {
       setLoadingMore(false)
+      isLoadingMoreRef.current = false
     }
   }, [
     currentSessionId,
     dateJumpCursorSortSeq,
     dateJumpCursorCreateTime,
     dateJumpCursorLocalId,
-    isLoadingMore,
     hasMoreMessages,
     appendMessages,
+    captureScrollAnchor,
+    restoreScrollAnchor,
     setHasMoreMessages,
     setLoadingMore
   ])
 
   // 日期跳转模式：向下滑动加载更新的消息
   const loadMoreMessagesAfterInDateJumpMode = useCallback(async () => {
-    if (!currentSessionId || dateJumpCursorSortSeqEnd === null || isLoadingMore || !hasMoreMessagesAfter) return
+    if (!currentSessionId || dateJumpCursorSortSeqEnd === null || isLoadingMoreRef.current || !hasMoreMessagesAfter) return
 
     const listEl = messageListRef.current
     if (!listEl) return
@@ -792,6 +871,7 @@ function ChatPage(_props: ChatPageProps) {
     const oldScrollHeight = listEl.scrollHeight
     const oldScrollTop = listEl.scrollTop
 
+    isLoadingMoreRef.current = true
     setLoadingMore(true)
     try {
       const result = await window.electronAPI.chat.getMessagesAfter(
@@ -845,13 +925,13 @@ function ChatPage(_props: ChatPageProps) {
       console.error('日期跳转模式向下加载失败:', e)
     } finally {
       setLoadingMore(false)
+      isLoadingMoreRef.current = false
     }
   }, [
     currentSessionId,
     dateJumpCursorSortSeqEnd,
     dateJumpCursorCreateTimeEnd,
     dateJumpCursorLocalIdEnd,
-    isLoadingMore,
     hasMoreMessagesAfter,
     appendMessages
   ])
@@ -860,17 +940,19 @@ function ChatPage(_props: ChatPageProps) {
     if (!messageListRef.current) return
 
     const { scrollTop, clientHeight, scrollHeight } = messageListRef.current
+    const isScrollingUp = scrollTop < lastScrollTopRef.current - 4
+    lastScrollTopRef.current = scrollTop
 
     // 显示回到底部按钮：距离底部超过 300px
     const distanceFromBottom = scrollHeight - scrollTop - clientHeight
     setShowScrollToBottom(distanceFromBottom > 300)
 
-    if (!isLoadingMore && currentSessionId) {
-      const topThreshold = clientHeight * 0.3
+    if (!isLoadingMoreRef.current && currentSessionId) {
+      const topThreshold = Math.max(clientHeight * 2, 1200)
       const bottomThreshold = clientHeight * 0.3
 
-      // 向上滑动：加载更早的消息
-      if (scrollTop < topThreshold && hasMoreMessages) {
+      // 向上滑动：提前加载更早的消息，不等用户真正顶到顶部
+      if (isScrollingUp && scrollTop < topThreshold && hasMoreMessages) {
         if (isDateJumpMode) {
           loadMoreMessagesInDateJumpMode()
         } else {
@@ -884,7 +966,6 @@ function ChatPage(_props: ChatPageProps) {
       }
     }
   }, [
-    isLoadingMore,
     hasMoreMessages,
     hasMoreMessagesAfter,
     currentSessionId,
@@ -897,19 +978,26 @@ function ChatPage(_props: ChatPageProps) {
   // 滚动到底部
   const scrollToBottom = useCallback((smooth: boolean | React.MouseEvent = true) => {
     if (messageListRef.current) {
-      // 如果传入的是事件对象，默认为 smooth
       const isSmooth = typeof smooth === 'boolean' ? smooth : true;
-
       if (isSmooth) {
-        messageListRef.current.scrollTo({
-          top: messageListRef.current.scrollHeight,
-          behavior: 'smooth'
-        })
+        messageListRef.current.scrollTo({ top: messageListRef.current.scrollHeight, behavior: 'smooth' })
       } else {
         messageListRef.current.scrollTop = messageListRef.current.scrollHeight
       }
     }
   }, [])
+
+  // Scroll to bottom after initial message render
+  useEffect(() => {
+    if (scrollToBottomAfterRenderRef.current) {
+      scrollToBottomAfterRenderRef.current = false
+      requestAnimationFrame(() => {
+        if (messageListRef.current) {
+          messageListRef.current.scrollTop = messageListRef.current.scrollHeight
+        }
+      })
+    }
+  }, [messages])
 
   // 日期跳转处理
   const handleJumpToDate = useCallback(async () => {
@@ -1963,8 +2051,14 @@ function ChatPage(_props: ChatPageProps) {
                     // 系统消息居中显示
                     const wrapperClass = isSystem ? 'system' : (isSent ? 'sent' : 'received')
 
+                    const messageDomKey = getMessageDomKey(msg)
+
                     return (
-                      <div key={msg.localId} className={`message-wrapper ${wrapperClass}`}>
+                      <div
+                        key={messageDomKey}
+                        className={`message-wrapper ${wrapperClass}`}
+                        data-message-key={messageDomKey}
+                      >
                         {showDateDivider && (
                           <div className="date-divider">
                             <span>{formatDateDivider(msg.createTime)}</span>
@@ -2993,6 +3087,7 @@ function MessageBubble({ message, session, showTime, myAvatarUrl, isGroupChat, h
   useEffect(() => {
     if (!isImage || !imageContainerRef.current) return
 
+    const scrollRoot = imageContainerRef.current.closest('.message-list') as HTMLElement | null
     const observer = new IntersectionObserver(
       (entries) => {
         entries.forEach((entry) => {
@@ -3003,7 +3098,8 @@ function MessageBubble({ message, session, showTime, myAvatarUrl, isGroupChat, h
         })
       },
       {
-        rootMargin: '1200px 0px', // 提前加载，减少滚动到位后的等待
+        root: scrollRoot,
+        rootMargin: '2800px 0px', // 提前约数屏预热，向上滚动时先解密上方图片
         threshold: 0
       }
     )

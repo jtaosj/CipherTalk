@@ -892,7 +892,7 @@ class ChatService extends EventEmitter {
         }
       }
 
-      if (tables.length > 0) {
+      if (tables.length > 0 && process.env.CIPHERTALK_CHAT_DEBUG === '1') {
         const sample = tables.slice(0, 8).map(t => t.name).join(', ')
         console.warn(`[ChatService] 未匹配到消息表: session=${sessionId}, hash=${hash}, tables=${tables.length}, sample=[${sample}]`)
       }

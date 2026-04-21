@@ -53,7 +53,10 @@ WeFlow
 WxKey-CC
 upx
 native-dlls
+native/image-decrypt/
+native/image-decrypt/target
 resources/whisper
 xkey
 skills
 .claude/
+.tmp

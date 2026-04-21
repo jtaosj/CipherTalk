@@ -2243,8 +2243,7 @@ function registerIpcHandlers() {
   ipcMain.handle('imageDecrypt:decryptImage', async (_, inputPath: string, outputPath: string, xorKey: number, aesKey?: string) => {
     try {
       logService?.info('ImageDecrypt', '开始解密图片', { inputPath, outputPath })
-      const aesKeyBuffer = aesKey ? imageDecryptService.asciiKey16(aesKey) : undefined
-      await imageDecryptService.decryptToFile(inputPath, outputPath, xorKey, aesKeyBuffer)
+      await imageDecryptService.decryptToFile(inputPath, outputPath, xorKey, aesKey)
       logService?.info('ImageDecrypt', '图片解密成功', { outputPath })
       return { success: true }
     } catch (e) {

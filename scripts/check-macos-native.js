@@ -3,6 +3,7 @@ const path = require('path')
 
 const rootDir = path.resolve(__dirname, '..')
 const macosDir = path.join(rootDir, 'resources', 'macos')
+const imageNativeBaseDir = path.join(rootDir, 'resources', 'wedecrypt')
 
 const requiredArtifacts = [
   { name: 'libwx_key.dylib', type: 'file', generated: true },
@@ -64,6 +65,20 @@ function main() {
     }
     process.exit(2)
   }
+
+  const imageNativeArch = process.env.CIPHERTALK_IMAGE_NATIVE_ARCH || process.arch
+  const imageNativeAddon = path.join(
+    imageNativeBaseDir,
+    `ciphertalk-image-native-macos-${imageNativeArch}.node`
+  )
+
+  const imageNativeStat = statSafe(imageNativeAddon)
+  if (!imageNativeStat || !imageNativeStat.isFile()) {
+    console.error(`[macos-native-check] missing image native addon: ${imageNativeAddon}`)
+    process.exit(3)
+  }
+
+  console.log(`[macos-native-check] image native addon ok: ${imageNativeAddon} (${imageNativeStat.size} bytes)`)
 
   console.log('[macos-native-check] all required macOS native artifacts are present')
 }

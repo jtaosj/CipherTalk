@@ -11,6 +11,7 @@ import { promisify } from 'util'
 import { ConfigService } from './config'
 import { getDefaultCachePath as getPlatformDefaultCachePath } from './platformService'
 import { getDocumentsPath, getExePath } from './runtimePaths'
+import { decryptDatViaNative, nativeAddonLocation, nativeAddonMetadata, nativeDecryptEnabled } from './nativeImageDecrypt'
 
 const execFileAsync = promisify(execFile)
 
@@ -43,10 +44,22 @@ type HardlinkState = {
   dirTable?: string
 }
 
+type DatDecryptOutcome = {
+  data: Buffer
+  source: 'native' | 'ts'
+  fallbackReason?: string
+}
+
+type ResolveDatDiagnostics = {
+  source?: string
+}
+
 export class ImageDecryptService {
   private configService = new ConfigService()
   private hardlinkCache = new Map<string, HardlinkState>()
   private resolvedCache = new Map<string, string>()
+  private sessionDatDirCache = new Map<string, string>()
+  private sessionDatRootCache = new Map<string, string>()
   private pending = new Map<string, Promise<DecryptResult>>()
   private noLiveSet = new Set<string>()
   private readonly defaultV1AesKey = 'cfcd208495d565ef'
@@ -54,6 +67,7 @@ export class ImageDecryptService {
   private cacheIndexing: Promise<void> | null = null
   private updateFlags = new Map<string, boolean>()
   private notFoundCache = new Set<string>()  // 失败缓存，避免重复查询
+  private nativeLogged = false
 
   async resolveCachedImage(payload: { sessionId?: string; imageMd5?: string; imageDatName?: string }): Promise<DecryptResult & { hasUpdate?: boolean }> {
     // 不再等待缓存索引，直接查找
@@ -66,7 +80,7 @@ export class ImageDecryptService {
     // 1. 先检查内存缓存（最快）
     for (const key of cacheKeys) {
       const cached = this.resolvedCache.get(key)
-      if (cached && existsSync(cached) && this.isImageFile(cached)) {
+      if (cached && this.validateCachedImageFile(cached)) {
         const localPath = this.filePathToUrl(cached)
         const isThumb = this.isThumbnailPath(cached)
         const hasUpdate = isThumb ? (this.updateFlags.get(key) ?? false) : false
@@ -79,7 +93,7 @@ export class ImageDecryptService {
         this.emitCacheResolved(payload, key, localPath)
         return { success: true, localPath, hasUpdate, liveVideoPath }
       }
-      if (cached && !this.isImageFile(cached)) {
+      if (cached && !this.validateCachedImageFile(cached)) {
         this.resolvedCache.delete(key)
       }
     }
@@ -127,7 +141,7 @@ export class ImageDecryptService {
       // 快速查找高清图缓存
       const hdCached = this.findCachedOutputFast(cacheKey, payload.sessionId, true) ||
         this.findCachedOutput(cacheKey, payload.sessionId, true)
-      if (hdCached && existsSync(hdCached) && this.isImageFile(hdCached)) {
+      if (hdCached && this.validateCachedImageFile(hdCached)) {
         const localPath = this.filePathToUrl(hdCached)
         const liveVideoPath = this.checkLiveVideoCache(hdCached)
         return { success: true, localPath, isThumb: false, liveVideoPath }
@@ -135,12 +149,12 @@ export class ImageDecryptService {
     } else {
       // 常规缓存检查（可能返回缩略图）
       const cached = this.resolvedCache.get(cacheKey)
-      if (cached && existsSync(cached) && this.isImageFile(cached)) {
+      if (cached && this.validateCachedImageFile(cached)) {
         const localPath = this.filePathToUrl(cached)
         const liveVideoPath = this.checkLiveVideoCache(cached)
         return { success: true, localPath, liveVideoPath }
       }
-      if (cached && !this.isImageFile(cached)) {
+      if (cached && !this.validateCachedImageFile(cached)) {
         this.resolvedCache.delete(cacheKey)
       }
     }
@@ -163,6 +177,23 @@ export class ImageDecryptService {
     payload: { sessionId?: string; imageMd5?: string; imageDatName?: string; force?: boolean },
     cacheKey: string
   ): Promise<DecryptResult> {
+    const totalStartedAt = Date.now()
+    let resolveDatMs = 0
+    let cacheLookupMs = 0
+    let decryptMs = 0
+    let wxgfMs = 0
+    let writeMs = 0
+    let motionVideoMs = 0
+    let thumbnailCleanupMs = 0
+    let datPath: string | null = null
+    const datDiagnostics: ResolveDatDiagnostics = {}
+    let decryptSource: 'native' | 'ts' | 'none' = 'none'
+    let fallbackReason: string | undefined
+    let finalExtForLog: string | undefined
+    let nativeFallbackUsed = false
+    let usedCachedOutput = false
+    let wxgfDetected = false
+
     try {
       const wxid = this.configService.get('myWxid')
       const dbPath = this.configService.get('dbPath')
@@ -176,36 +207,107 @@ export class ImageDecryptService {
         return { success: false, error: '未找到账号目录' }
       }
 
-      const datPath = await this.resolveDatPath(
+      const resolveDatStartedAt = Date.now()
+      datPath = await this.resolveDatPath(
         accountDir,
         payload.imageMd5,
         payload.imageDatName,
         payload.sessionId,
-        { allowThumbnail: !payload.force, skipResolvedCache: Boolean(payload.force) }
+        { allowThumbnail: !payload.force, skipResolvedCache: Boolean(payload.force) },
+        datDiagnostics
       )
+      resolveDatMs = Date.now() - resolveDatStartedAt
 
       // 如果要求高清图但没找到，直接返回提示
       if (!datPath && payload.force) {
         console.warn(`[ImageDecrypt] 未找到高清图: ${payload.imageDatName || payload.imageMd5}`)
+        this.logDecryptTiming({
+          cacheKey,
+          payload,
+          datPath,
+          resolveSource: datDiagnostics.source,
+          resolveDatMs,
+          cacheLookupMs,
+          decryptMs,
+          wxgfMs,
+          writeMs,
+          motionVideoMs,
+          thumbnailCleanupMs,
+          decryptSource,
+          fallbackReason,
+          finalExt: finalExtForLog,
+          usedCachedOutput,
+          nativeFallbackUsed,
+          wxgfDetected,
+          status: 'missing_hd',
+          totalMs: Date.now() - totalStartedAt
+        })
         return { success: false, error: '未找到高清图，请在微信中点开该图片查看后重试' }
       }
       if (!datPath) {
         this.notFoundCache.add(cacheKey)
         console.warn(`[ImageDecrypt] 未找到图片文件: ${payload.imageDatName || payload.imageMd5} sessionId=${payload.sessionId}`)
+        this.logDecryptTiming({
+          cacheKey,
+          payload,
+          datPath,
+          resolveSource: datDiagnostics.source,
+          resolveDatMs,
+          cacheLookupMs,
+          decryptMs,
+          wxgfMs,
+          writeMs,
+          motionVideoMs,
+          thumbnailCleanupMs,
+          decryptSource,
+          fallbackReason,
+          finalExt: finalExtForLog,
+          usedCachedOutput,
+          nativeFallbackUsed,
+          wxgfDetected,
+          status: 'missing_dat',
+          totalMs: Date.now() - totalStartedAt
+        })
         return { success: false, error: '未找到图片文件' }
       }
 
       if (!extname(datPath).toLowerCase().includes('dat')) {
+        this.cacheSessionDatRoot(accountDir, payload.sessionId, datPath)
         this.cacheResolvedPaths(cacheKey, payload.imageMd5, payload.imageDatName, datPath)
         const localPath = this.filePathToUrl(datPath)
         const isThumb = this.isThumbnailPath(datPath)
         this.emitCacheResolved(payload, cacheKey, localPath)
+        this.logDecryptTiming({
+          cacheKey,
+          payload,
+          datPath,
+          resolveSource: datDiagnostics.source,
+          resolveDatMs,
+          cacheLookupMs,
+          decryptMs,
+          wxgfMs,
+          writeMs,
+          motionVideoMs,
+          thumbnailCleanupMs,
+          decryptSource,
+          fallbackReason,
+          finalExt: extname(datPath).toLowerCase(),
+          usedCachedOutput,
+          nativeFallbackUsed,
+          wxgfDetected,
+          status: 'plain_file',
+          totalMs: Date.now() - totalStartedAt
+        })
         return { success: true, localPath, isThumb, liveVideoPath: !isThumb ? this.checkLiveVideoCache(datPath) : undefined }
       }
 
       // 查找已缓存的解密文件
-      const existing = this.findCachedOutput(cacheKey, payload.sessionId, payload.force)
+      const cacheLookupStartedAt = Date.now()
+      const existing = this.findCachedOutputFast(cacheKey, payload.sessionId, payload.force) ||
+        (!payload.sessionId ? this.findCachedOutput(cacheKey, payload.sessionId, payload.force) : null)
+      cacheLookupMs = Date.now() - cacheLookupStartedAt
       if (existing) {
+        usedCachedOutput = true
         const isHd = this.isHdPath(existing)
         // 如果要求高清但找到的是缩略图，继续解密高清图
         if (!(payload.force && !isHd)) {
@@ -213,6 +315,27 @@ export class ImageDecryptService {
           const localPath = this.filePathToUrl(existing)
           const isThumb = this.isThumbnailPath(existing)
           this.emitCacheResolved(payload, cacheKey, localPath)
+          this.logDecryptTiming({
+            cacheKey,
+            payload,
+            datPath,
+            resolveSource: datDiagnostics.source,
+            resolveDatMs,
+            cacheLookupMs,
+            decryptMs,
+            wxgfMs,
+            writeMs,
+            motionVideoMs,
+            thumbnailCleanupMs,
+            decryptSource,
+            fallbackReason,
+            finalExt: extname(existing).toLowerCase(),
+            usedCachedOutput,
+            nativeFallbackUsed,
+            wxgfDetected,
+            status: 'cache_hit',
+            totalMs: Date.now() - totalStartedAt
+          })
           return { success: true, localPath, isThumb, liveVideoPath: !isThumb ? this.checkLiveVideoCache(existing) : undefined }
         }
       }
@@ -235,41 +358,71 @@ export class ImageDecryptService {
       }
 
       const aesKeyRaw = this.configService.get('imageAesKey')
+      const aesKeyText = typeof aesKeyRaw === 'string' ? aesKeyRaw.trim() : ''
       const aesKey = this.resolveAesKey(aesKeyRaw)
 
-      let decrypted = await this.decryptDatAuto(datPath, xorKey, aesKey)
+      const decryptStartedAt = Date.now()
+      let decryptOutcome = await this.decryptDatAuto(datPath, xorKey, aesKey, aesKeyText)
+      decryptMs += Date.now() - decryptStartedAt
+      decryptSource = decryptOutcome.source
+      fallbackReason = decryptOutcome.fallbackReason
+      let decrypted = decryptOutcome.data
 
-      // 检查是否是 wxgf 格式，如果是则尝试提取真实图片数据
-      const wxgfResult = await this.unwrapWxgf(decrypted)
+      const unwrapStartedAt = Date.now()
+      let wxgfResult = await this.unwrapWxgf(decrypted)
+      wxgfMs += Date.now() - unwrapStartedAt
+      wxgfDetected = wxgfResult.isWxgf
       decrypted = wxgfResult.data
 
       let ext = this.detectImageExtension(decrypted)
 
-      // 如果是 wxgf 格式且没检测到扩展名
       if (wxgfResult.isWxgf && !ext) {
-        // wxgf 格式需要 ffmpeg 转换，如果转换失败则无法显示
         ext = '.hevc'
       }
 
+      if (!ext && decryptOutcome.source === 'native') {
+        console.warn(`[ImageDecrypt] Native DAT 解密结果无效，回退 TS 逻辑: ${datPath} reason=${decryptOutcome.fallbackReason || 'invalid_output'}`)
+        nativeFallbackUsed = true
+        fallbackReason = decryptOutcome.fallbackReason || 'invalid_output'
+        const fallbackDecryptStartedAt = Date.now()
+        decryptOutcome = this.decryptDatLegacy(datPath, xorKey, aesKey)
+        decryptMs += Date.now() - fallbackDecryptStartedAt
+        decryptSource = decryptOutcome.source
+        decrypted = decryptOutcome.data
+        const fallbackUnwrapStartedAt = Date.now()
+        wxgfResult = await this.unwrapWxgf(decrypted)
+        wxgfMs += Date.now() - fallbackUnwrapStartedAt
+        wxgfDetected = wxgfResult.isWxgf
+        decrypted = wxgfResult.data
+        ext = this.detectImageExtension(decrypted)
+        if (wxgfResult.isWxgf && !ext) {
+          ext = '.hevc'
+        }
+      }
+
       const finalExt = ext || '.jpg'
+      finalExtForLog = finalExt
 
       // 图片完整性校验：检测解密后的数据是否有完整的结束标记
       const isImageComplete = this.verifyImageComplete(decrypted, finalExt)
 
-      // 诊断日志：记录关键数据以便定位半白图片的根因
-      const datSize = statSync(datPath).size
-      const datVersion = this.getDatVersion(datPath)
       if (!isImageComplete) {
+        const datSize = statSync(datPath).size
+        const datVersion = this.getDatVersion(datPath)
         console.warn(`[ImageDecrypt] 图片不完整! cacheKey=${cacheKey} datPath=${datPath} datSize=${datSize} version=V${datVersion === 0 ? '3' : datVersion === 1 ? '4v1' : '4v2'} decryptedSize=${decrypted.length} ext=${finalExt} headHex=${decrypted.subarray(0, 8).toString('hex')} tailHex=${decrypted.subarray(Math.max(0, decrypted.length - 8)).toString('hex')}`)
       }
 
       const outputPath = this.getCacheOutputPathFromDat(datPath, finalExt, payload.sessionId)
+      const writeStartedAt = Date.now()
       await writeFile(outputPath, decrypted)
+      writeMs = Date.now() - writeStartedAt
 
       // 检测实况照片（Motion Photo）
       let liveVideoPath: string | undefined
       if (!this.isThumbnailPath(datPath) && (finalExt === '.jpg' || finalExt === '.jpeg')) {
+        const motionStartedAt = Date.now()
         const vp = await this.extractMotionPhotoVideo(outputPath, decrypted)
+        motionVideoMs = Date.now() - motionStartedAt
         if (vp) liveVideoPath = this.filePathToUrl(vp)
       }
 
@@ -277,16 +430,40 @@ export class ImageDecryptService {
 
       // 如果图片是完整的，才缓存路径映射（不完整的下次重新解密）
       if (isImageComplete) {
+        this.cacheSessionDatRoot(accountDir, payload.sessionId, datPath)
         this.cacheResolvedPaths(cacheKey, payload.imageMd5, payload.imageDatName, outputPath)
         if (!isThumb) {
           this.clearUpdateFlags(cacheKey, payload.imageMd5, payload.imageDatName)
-          this.deleteThumbnailByKeys(this.getCacheKeys(payload))
+          const thumbnailCleanupStartedAt = Date.now()
+          this.deleteThumbnailByKeysInDir(this.getCacheKeys(payload), dirname(outputPath))
+          thumbnailCleanupMs = Date.now() - thumbnailCleanupStartedAt
         }
       }
 
       // 对于 hevc 格式，返回错误提示用户安装 ffmpeg
       if (finalExt === '.hevc') {
         console.warn(`[ImageDecrypt] 检测到 wxgf/hevc 格式图片，但未启用转换或转换失败: ${cacheKey}`)
+        this.logDecryptTiming({
+          cacheKey,
+          payload,
+          datPath,
+          resolveSource: datDiagnostics.source,
+          resolveDatMs,
+          cacheLookupMs,
+          decryptMs,
+          wxgfMs,
+          writeMs,
+          motionVideoMs,
+          thumbnailCleanupMs,
+          decryptSource,
+          fallbackReason,
+          finalExt: finalExtForLog,
+          usedCachedOutput,
+          nativeFallbackUsed,
+          wxgfDetected,
+          status: 'hevc_unavailable',
+          totalMs: Date.now() - totalStartedAt
+        })
         return {
           success: false,
           error: '此图片为微信新格式(wxgf)，需要安装 ffmpeg 才能显示。请运行: winget install ffmpeg',
@@ -296,12 +473,121 @@ export class ImageDecryptService {
 
       const localPath = this.filePathToUrl(outputPath)
       this.emitCacheResolved(payload, cacheKey, localPath)
+      this.logDecryptTiming({
+        cacheKey,
+        payload,
+        datPath,
+        resolveSource: datDiagnostics.source,
+        resolveDatMs,
+        cacheLookupMs,
+        decryptMs,
+        wxgfMs,
+        writeMs,
+        motionVideoMs,
+        thumbnailCleanupMs,
+        decryptSource,
+        fallbackReason,
+        finalExt: finalExtForLog,
+        usedCachedOutput,
+        nativeFallbackUsed,
+        wxgfDetected,
+        status: 'success',
+        totalMs: Date.now() - totalStartedAt
+      })
 
       return { success: true, localPath, isThumb, liveVideoPath }
     } catch (e) {
+      this.logDecryptTiming({
+        cacheKey,
+        payload,
+        datPath,
+        resolveSource: datDiagnostics.source,
+        resolveDatMs,
+        cacheLookupMs,
+        decryptMs,
+        wxgfMs,
+        writeMs,
+        motionVideoMs,
+        thumbnailCleanupMs,
+        decryptSource,
+        fallbackReason,
+        finalExt: finalExtForLog,
+        usedCachedOutput,
+        nativeFallbackUsed,
+        wxgfDetected,
+        status: 'error',
+        totalMs: Date.now() - totalStartedAt,
+        error: String(e)
+      })
       console.error(`[ImageDecrypt] 解密异常: ${cacheKey}`, e)
       return { success: false, error: String(e) }
     }
+  }
+
+  private logDecryptTiming(details: {
+    cacheKey: string
+    payload: { sessionId?: string; imageMd5?: string; imageDatName?: string; force?: boolean }
+    datPath: string | null
+    resolveSource?: string
+    resolveDatMs: number
+    cacheLookupMs: number
+    decryptMs: number
+    wxgfMs: number
+    writeMs: number
+    motionVideoMs: number
+    thumbnailCleanupMs: number
+    decryptSource: 'native' | 'ts' | 'none'
+    fallbackReason?: string
+    finalExt?: string
+    usedCachedOutput: boolean
+    nativeFallbackUsed: boolean
+    wxgfDetected: boolean
+    status: 'success' | 'cache_hit' | 'plain_file' | 'missing_dat' | 'missing_hd' | 'hevc_unavailable' | 'error'
+    totalMs: number
+    error?: string
+  }): void {
+    if (process.env.CIPHERTALK_IMAGE_DECRYPT_DEBUG !== '1') return
+
+    const shouldLog =
+      details.status !== 'success' ||
+      details.totalMs >= 300 ||
+      details.resolveDatMs >= 120 ||
+      details.cacheLookupMs >= 80 ||
+      details.decryptMs >= 100 ||
+      details.wxgfMs >= 100 ||
+      details.writeMs >= 80 ||
+      details.motionVideoMs >= 120 ||
+      details.thumbnailCleanupMs >= 80 ||
+      details.nativeFallbackUsed ||
+      details.resolveSource === 'search' ||
+      details.resolveSource === 'search_normalized'
+
+    if (!shouldLog) return
+
+    console.info('[ImageDecrypt] 耗时分析', {
+      cacheKey: details.cacheKey,
+      sessionId: details.payload.sessionId,
+      imageDatName: details.payload.imageDatName,
+      imageMd5: details.payload.imageMd5,
+      force: Boolean(details.payload.force),
+      status: details.status,
+      datPath: details.datPath,
+      resolveSource: details.resolveSource || 'unknown',
+      usedCachedOutput: details.usedCachedOutput,
+      decryptSource: details.decryptSource,
+      fallbackReason: details.fallbackReason || null,
+      wxgfDetected: details.wxgfDetected,
+      finalExt: details.finalExt || null,
+      totalMs: details.totalMs,
+      resolveDatMs: details.resolveDatMs,
+      cacheLookupMs: details.cacheLookupMs,
+      decryptMs: details.decryptMs,
+      wxgfMs: details.wxgfMs,
+      writeMs: details.writeMs,
+      motionVideoMs: details.motionVideoMs,
+      thumbnailCleanupMs: details.thumbnailCleanupMs,
+      error: details.error || null
+    })
   }
 
   private resolveAccountDir(dbPath: string, wxid: string): string | null {
@@ -412,7 +698,8 @@ export class ImageDecryptService {
     imageMd5?: string,
     imageDatName?: string,
     sessionId?: string,
-    options?: { allowThumbnail?: boolean; skipResolvedCache?: boolean }
+    options?: { allowThumbnail?: boolean; skipResolvedCache?: boolean },
+    diagnostics?: ResolveDatDiagnostics
   ): Promise<string | null> {
     const allowThumbnail = options?.allowThumbnail ?? true
     const skipResolvedCache = options?.skipResolvedCache ?? false
@@ -423,6 +710,8 @@ export class ImageDecryptService {
       if (hardlinkPath) {
         const isThumb = this.isThumbnailPath(hardlinkPath)
         if (allowThumbnail || !isThumb) {
+          diagnostics && (diagnostics.source = 'hardlink')
+          this.cacheSessionDatRoot(accountDir, sessionId, hardlinkPath)
           this.cacheDatPath(accountDir, imageMd5, hardlinkPath)
           if (imageDatName) this.cacheDatPath(accountDir, imageDatName, hardlinkPath)
           return hardlinkPath
@@ -431,6 +720,8 @@ export class ImageDecryptService {
         // 尝试在同一目录下查找高清图变体（快速查找）
         const hdPath = this.findHdVariantInSameDir(hardlinkPath)
         if (hdPath) {
+          diagnostics && (diagnostics.source = 'hardlink_hd_same_dir')
+          this.cacheSessionDatRoot(accountDir, sessionId, hdPath)
           this.cacheDatPath(accountDir, imageMd5, hdPath)
           if (imageDatName) this.cacheDatPath(accountDir, imageDatName, hdPath)
           return hdPath
@@ -438,6 +729,8 @@ export class ImageDecryptService {
         // 同目录没找到高清图，尝试在该目录下搜索
         const hdInDir = await this.searchDatFileInDir(dirname(hardlinkPath), imageDatName || imageMd5 || '', false)
         if (hdInDir) {
+          diagnostics && (diagnostics.source = 'hardlink_hd_dir_scan')
+          this.cacheSessionDatRoot(accountDir, sessionId, hdInDir)
           this.cacheDatPath(accountDir, imageMd5, hdInDir)
           if (imageDatName) this.cacheDatPath(accountDir, imageDatName, hdInDir)
           return hdInDir
@@ -452,18 +745,24 @@ export class ImageDecryptService {
       if (hardlinkPath) {
         const isThumb = this.isThumbnailPath(hardlinkPath)
         if (allowThumbnail || !isThumb) {
+          diagnostics && (diagnostics.source = 'hardlink')
+          this.cacheSessionDatRoot(accountDir, sessionId, hardlinkPath)
           this.cacheDatPath(accountDir, imageDatName, hardlinkPath)
           return hardlinkPath
         }
         // hardlink 找到的是缩略图，但要求高清图
         const hdPath = this.findHdVariantInSameDir(hardlinkPath)
         if (hdPath) {
+          diagnostics && (diagnostics.source = 'hardlink_hd_same_dir')
+          this.cacheSessionDatRoot(accountDir, sessionId, hdPath)
           this.cacheDatPath(accountDir, imageDatName, hdPath)
           return hdPath
         }
         // 同目录没找到高清图，尝试在该目录下搜索
         const hdInDir = await this.searchDatFileInDir(dirname(hardlinkPath), imageDatName, false)
         if (hdInDir) {
+          diagnostics && (diagnostics.source = 'hardlink_hd_dir_scan')
+          this.cacheSessionDatRoot(accountDir, sessionId, hdInDir)
           this.cacheDatPath(accountDir, imageDatName, hdInDir)
           return hdInDir
         }
@@ -477,19 +776,102 @@ export class ImageDecryptService {
     if (!skipResolvedCache) {
       const cached = this.resolvedCache.get(imageDatName)
       if (cached && existsSync(cached)) {
-        if (allowThumbnail || !this.isThumbnailPath(cached)) return cached
+        if (allowThumbnail || !this.isThumbnailPath(cached)) {
+          diagnostics && (diagnostics.source = 'resolved_cache')
+          this.cacheSessionDatRoot(accountDir, sessionId, cached)
+          return cached
+        }
         // 缓存的是缩略图，尝试找高清图
         const hdPath = this.findHdVariantInSameDir(cached)
-        if (hdPath) return hdPath
+        if (hdPath) {
+          diagnostics && (diagnostics.source = 'resolved_cache_hd_same_dir')
+          this.cacheSessionDatRoot(accountDir, sessionId, hdPath)
+          return hdPath
+        }
         // 同目录没找到，尝试在该目录下搜索
         const hdInDir = await this.searchDatFileInDir(dirname(cached), imageDatName, false)
-        if (hdInDir) return hdInDir
+        if (hdInDir) {
+          diagnostics && (diagnostics.source = 'resolved_cache_hd_dir_scan')
+          this.cacheSessionDatRoot(accountDir, sessionId, hdInDir)
+          return hdInDir
+        }
+      }
+    }
+
+    const sessionHashRoot = this.resolveSessionHashDatRoot(accountDir, sessionId)
+    if (sessionHashRoot) {
+      const sessionHashPath = this.searchDatInSessionRoot(sessionHashRoot, imageDatName, allowThumbnail)
+      if (sessionHashPath) {
+        diagnostics && (diagnostics.source = 'session_hash_root')
+        this.cacheSessionDatRoot(accountDir, sessionId, sessionHashPath)
+        this.resolvedCache.set(imageDatName, sessionHashPath)
+        this.cacheDatPath(accountDir, imageDatName, sessionHashPath)
+        return sessionHashPath
+      }
+      const normalized = this.normalizeDatBase(imageDatName)
+      if (normalized !== imageDatName.toLowerCase()) {
+        const normalizedSessionHashPath = this.searchDatInSessionRoot(sessionHashRoot, normalized, allowThumbnail)
+        if (normalizedSessionHashPath) {
+          diagnostics && (diagnostics.source = 'session_hash_root_normalized')
+          this.cacheSessionDatRoot(accountDir, sessionId, normalizedSessionHashPath)
+          this.resolvedCache.set(imageDatName, normalizedSessionHashPath)
+          this.cacheDatPath(accountDir, imageDatName, normalizedSessionHashPath)
+          return normalizedSessionHashPath
+        }
+      }
+    }
+
+    const cachedSessionDir = this.getCachedSessionDatDir(accountDir, sessionId)
+    if (cachedSessionDir) {
+      const directSessionPath = this.searchDatInKnownDir(cachedSessionDir, imageDatName, allowThumbnail)
+      if (directSessionPath) {
+        diagnostics && (diagnostics.source = 'session_dir_cache')
+        this.cacheSessionDatRoot(accountDir, sessionId, directSessionPath)
+        this.resolvedCache.set(imageDatName, directSessionPath)
+        this.cacheDatPath(accountDir, imageDatName, directSessionPath)
+        return directSessionPath
+      }
+      const normalized = this.normalizeDatBase(imageDatName)
+      if (normalized !== imageDatName.toLowerCase()) {
+        const normalizedDirectSessionPath = this.searchDatInKnownDir(cachedSessionDir, normalized, allowThumbnail)
+        if (normalizedDirectSessionPath) {
+          diagnostics && (diagnostics.source = 'session_dir_cache_normalized')
+          this.cacheSessionDatRoot(accountDir, sessionId, normalizedDirectSessionPath)
+          this.resolvedCache.set(imageDatName, normalizedDirectSessionPath)
+          this.cacheDatPath(accountDir, imageDatName, normalizedDirectSessionPath)
+          return normalizedDirectSessionPath
+        }
+      }
+    }
+
+    const cachedSessionRoot = this.getCachedSessionDatRoot(accountDir, sessionId)
+    if (cachedSessionRoot) {
+      const sessionPath = this.searchDatInSessionRoot(cachedSessionRoot, imageDatName, allowThumbnail)
+      if (sessionPath) {
+        diagnostics && (diagnostics.source = 'session_root_cache')
+        this.cacheSessionDatRoot(accountDir, sessionId, sessionPath)
+        this.resolvedCache.set(imageDatName, sessionPath)
+        this.cacheDatPath(accountDir, imageDatName, sessionPath)
+        return sessionPath
+      }
+      const normalized = this.normalizeDatBase(imageDatName)
+      if (normalized !== imageDatName.toLowerCase()) {
+        const normalizedSessionPath = this.searchDatInSessionRoot(cachedSessionRoot, normalized, allowThumbnail)
+        if (normalizedSessionPath) {
+          diagnostics && (diagnostics.source = 'session_root_cache_normalized')
+          this.cacheSessionDatRoot(accountDir, sessionId, normalizedSessionPath)
+          this.resolvedCache.set(imageDatName, normalizedSessionPath)
+          this.cacheDatPath(accountDir, imageDatName, normalizedSessionPath)
+          return normalizedSessionPath
+        }
       }
     }
 
     // 只有在 hardlink 完全没有记录时才搜索文件夹
     const datPath = await this.searchDatFile(accountDir, imageDatName, allowThumbnail)
     if (datPath) {
+      diagnostics && (diagnostics.source = 'search')
+      this.cacheSessionDatRoot(accountDir, sessionId, datPath)
       this.resolvedCache.set(imageDatName, datPath)
       this.cacheDatPath(accountDir, imageDatName, datPath)
       return datPath
@@ -498,6 +880,8 @@ export class ImageDecryptService {
     if (normalized !== imageDatName.toLowerCase()) {
       const normalizedPath = await this.searchDatFile(accountDir, normalized, allowThumbnail)
       if (normalizedPath) {
+        diagnostics && (diagnostics.source = 'search_normalized')
+        this.cacheSessionDatRoot(accountDir, sessionId, normalizedPath)
         this.resolvedCache.set(imageDatName, normalizedPath)
         this.cacheDatPath(accountDir, imageDatName, normalizedPath)
         return normalizedPath
@@ -515,20 +899,19 @@ export class ImageDecryptService {
       const dir = dirname(thumbPath)
       const fileName = basename(thumbPath).toLowerCase()
 
-      // 提取基础名称（去掉 _t.dat 或 .t.dat）
+      // Extract base name by stripping _t/_t_W/_t_NW/.t and similar thumbnail suffixes
       let baseName = fileName
-      if (baseName.endsWith('_t.dat')) {
-        baseName = baseName.slice(0, -6)
-      } else if (baseName.endsWith('.t.dat')) {
-        baseName = baseName.slice(0, -6)
-      } else {
-        return null
-      }
+      if (baseName.endsWith('.dat')) baseName = baseName.slice(0, -4)
+      const thumbMatch = baseName.match(/^(.+?)[_.]t(?:_[a-z]+)?$/i)
+      if (!thumbMatch) return null
+      baseName = thumbMatch[1]
 
-      // 尝试查找高清图变体
+      // Try HD variants including _h_W, _h_NW etc.
       const variants = [
         `${baseName}_h.dat`,
         `${baseName}.h.dat`,
+        `${baseName}_h_w.dat`,
+        `${baseName}_h_nw.dat`,
         `${baseName}.dat`
       ]
 
@@ -783,11 +1166,8 @@ export class ImageDecryptService {
       let baseName = lowerName
       if (baseName.endsWith('.dat')) {
         baseName = baseName.slice(0, -4)
-        if (baseName.endsWith('_t') || baseName.endsWith('.t') || baseName.endsWith('_hd')) {
-          baseName = baseName.slice(0, -3)
-        } else if (baseName.endsWith('_thumb')) {
-          baseName = baseName.slice(0, -6)
-        }
+        // Strip variant suffixes like _t, _h, _t_W, _t_NW, _h_W, _hd, _thumb
+        baseName = baseName.replace(/[_.](?:t|h|hd|thumb)(?:_[a-z]+)?$/, '')
       }
 
       const candidates: string[] = []
@@ -939,8 +1319,7 @@ export class ImageDecryptService {
   private isThumbnailDat(fileName: string): boolean {
     const lower = fileName.toLowerCase()
     return (
-      lower.includes('.t.dat') ||
-      lower.includes('_t.dat') ||
+      /[._]t(?:_[a-z]+)?\.dat$/.test(lower) ||
       lower.includes('_thumb.dat')
     )
   }
@@ -995,17 +1374,7 @@ export class ImageDecryptService {
 
     // 校验缓存文件是否存在且完整，不完整的自动删除
     const validateCached = (filePath: string): boolean => {
-      if (!existsSync(filePath)) return false
-      try {
-        const size = statSync(filePath).size
-        if (size <= 100) { unlinkSync(filePath); return false }
-        if (!this.isFileTailValid(filePath, size)) {
-          console.warn(`[ImageDecrypt] 发现不完整缓存图片，已删除: ${filePath} (size=${size})`)
-          unlinkSync(filePath)
-          return false
-        }
-        return true
-      } catch { return false }
+      return this.validateCachedImageFile(filePath)
     }
 
     // 遍历所有可能的缓存根路径
@@ -1154,22 +1523,7 @@ export class ImageDecryptService {
 
         // 检查文件是否存在且图片数据完整
         for (const candidate of candidates) {
-          if (existsSync(candidate)) {
-            try {
-              const size = statSync(candidate).size
-              if (size <= 100) {
-                unlinkSync(candidate)
-                continue
-              }
-              // 快速校验图片末尾完整性（只读最后 64 字节）
-              if (this.isFileTailValid(candidate, size)) {
-                return candidate
-              }
-              // 图片末尾不完整（半截图），删除后让系统重新解密
-              console.warn(`[ImageDecrypt] 发现不完整缓存图片，已删除: ${candidate} (size=${size})`)
-              unlinkSync(candidate)
-            } catch { }
-          }
+          if (this.validateCachedImageFile(candidate)) return candidate
         }
       }
     }
@@ -1181,6 +1535,43 @@ export class ImageDecryptService {
    * 快速校验缓存图片文件末尾是否完整
    * 只读取最后 64 字节进行检查，开销极小
    */
+  private validateCachedImageFile(filePath: string): boolean {
+    if (!existsSync(filePath) || !this.isImageFile(filePath)) return false
+    try {
+      const size = statSync(filePath).size
+      if (size <= 100) {
+        unlinkSync(filePath)
+        return false
+      }
+      if (this.isSuspiciousBlankCachedImage(filePath, size)) {
+        console.warn(`[ImageDecrypt] 发现疑似 wxgf 白图缓存，已删除并触发重解: ${filePath} (size=${size})`)
+        unlinkSync(filePath)
+        return false
+      }
+      if (!this.isFileTailValid(filePath, size)) {
+        console.warn(`[ImageDecrypt] 发现不完整缓存图片，已删除: ${filePath} (size=${size})`)
+        unlinkSync(filePath)
+        return false
+      }
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  private isSuspiciousBlankCachedImage(filePath: string, fileSize: number): boolean {
+    const ext = extname(filePath).toLowerCase()
+    if (ext !== '.jpg' && ext !== '.jpeg') return false
+    if (fileSize > 8 * 1024) return false
+
+    try {
+      const data = readFileSync(filePath)
+      return this.isProbablyBlankConvertedJpeg(data)
+    } catch {
+      return false
+    }
+  }
+
   private isFileTailValid(filePath: string, fileSize: number): boolean {
     try {
       const ext = filePath.toLowerCase()
@@ -1328,6 +1719,118 @@ export class ImageDecryptService {
     }
   }
 
+  private cacheSessionDatRoot(accountDir: string, sessionId: string | undefined, datPath: string): void {
+    if (!sessionId || !datPath) return
+    const dirKey = `${accountDir}|${sessionId}`
+    const datDir = dirname(datPath)
+    if (existsSync(datDir)) {
+      this.sessionDatDirCache.set(dirKey, datDir)
+    }
+    const root = this.extractSessionDatRoot(accountDir, datPath)
+    if (!root || !existsSync(root)) return
+    this.sessionDatRootCache.set(dirKey, root)
+  }
+
+  private getCachedSessionDatDir(accountDir: string, sessionId?: string): string | null {
+    if (!sessionId) return null
+    const key = `${accountDir}|${sessionId}`
+    const cached = this.sessionDatDirCache.get(key)
+    if (cached && existsSync(cached)) return cached
+    if (cached) this.sessionDatDirCache.delete(key)
+    return null
+  }
+
+  private getCachedSessionDatRoot(accountDir: string, sessionId?: string): string | null {
+    if (!sessionId) return null
+    const key = `${accountDir}|${sessionId}`
+    const cached = this.sessionDatRootCache.get(key)
+    if (cached && existsSync(cached)) return cached
+    if (cached) this.sessionDatRootCache.delete(key)
+    return null
+  }
+
+  private resolveSessionHashDatRoot(accountDir: string, sessionId?: string): string | null {
+    if (!sessionId) return null
+    const root = join(accountDir, 'msg', 'attach', crypto.createHash('md5').update(sessionId).digest('hex'))
+    return existsSync(root) ? root : null
+  }
+
+  private getLikelyDatFileNames(datName: string, allowThumbnail = true): string[] {
+    const lower = datName.toLowerCase()
+    const normalized = this.normalizeDatBase(lower)
+    const names = [
+      lower.endsWith('.dat') ? lower : `${lower}.dat`,
+      `${normalized}.dat`,
+      `${normalized}_h.dat`,
+      `${normalized}.h.dat`,
+      `${normalized}_hd.dat`
+    ]
+    if (allowThumbnail) {
+      names.push(`${normalized}_t.dat`, `${normalized}.t.dat`, `${normalized}_thumb.dat`)
+    }
+    return Array.from(new Set(names.filter(Boolean)))
+  }
+
+  private searchDatInKnownDir(dirPath: string, datName: string, allowThumbnail = true): string | null {
+    if (!existsSync(dirPath)) return null
+    const candidateNames = this.getLikelyDatFileNames(datName, allowThumbnail)
+    for (const candidateName of candidateNames) {
+      const candidatePath = join(dirPath, candidateName)
+      if (!existsSync(candidatePath)) continue
+      if (!allowThumbnail && this.isThumbnailPath(candidatePath)) continue
+      return candidatePath
+    }
+    return null
+  }
+
+  private searchDatInSessionRoot(sessionRoot: string, datName: string, allowThumbnail = true): string | null {
+    if (!existsSync(sessionRoot)) return null
+
+    let monthDirs: string[]
+    try {
+      monthDirs = readdirSync(sessionRoot, { withFileTypes: true })
+        .filter(d => d.isDirectory() && /^\d{4}-\d{2}$/.test(d.name))
+        .map(d => d.name)
+        .sort()
+        .reverse()
+        .slice(0, 6)
+    } catch {
+      return null
+    }
+
+    const candidateNames = this.getLikelyDatFileNames(datName, allowThumbnail)
+    const subDirs = ['Img', 'Image', 'mg']
+    for (const monthDir of monthDirs) {
+      for (const subDir of subDirs) {
+        const imageDir = join(sessionRoot, monthDir, subDir)
+        const matched = this.searchDatInKnownDir(imageDir, datName, allowThumbnail)
+        if (matched) return matched
+        for (const candidateName of candidateNames) {
+          const candidatePath = join(imageDir, candidateName)
+          if (!existsSync(candidatePath)) continue
+          if (!allowThumbnail && this.isThumbnailPath(candidatePath)) continue
+          return candidatePath
+        }
+      }
+    }
+    return null
+  }
+
+  private extractSessionDatRoot(accountDir: string, datPath: string): string | null {
+    const attachRoot = join(accountDir, 'msg', 'attach')
+    const normalizedAttachRoot = attachRoot.toLowerCase()
+    const normalizedDatPath = datPath.toLowerCase()
+    if (!normalizedDatPath.startsWith(normalizedAttachRoot)) {
+      return dirname(datPath)
+    }
+
+    const relative = datPath.slice(attachRoot.length).replace(/^[\\/]+/, '')
+    if (!relative) return dirname(datPath)
+    const parts = relative.split(/[\\/]+/).filter(Boolean)
+    if (parts.length === 0) return dirname(datPath)
+    return join(attachRoot, parts[0])
+  }
+
   private clearUpdateFlags(cacheKey: string, imageMd5?: string, imageDatName?: string): void {
     this.updateFlags.delete(cacheKey)
     if (imageMd5) this.updateFlags.delete(imageMd5)
@@ -1388,6 +1891,39 @@ export class ImageDecryptService {
       if (normalizedKeys.includes(normalizedKey) || normalizedKeys.includes(lowerKey)) {
         this.resolvedCache.delete(key)
       }
+    }
+
+    return deleted
+  }
+
+  private deleteThumbnailByKeysInDir(keys: string[], dirPath: string): number {
+    if (keys.length === 0 || !dirPath || !existsSync(dirPath)) return 0
+    const extensions = ['.jpg', '.jpeg', '.png', '.gif', '.webp']
+    const normalizedKeys = Array.from(new Set(
+      keys
+        .map(k => this.normalizeDatBase(k.toLowerCase()))
+        .filter(Boolean)
+    ))
+    if (normalizedKeys.length === 0) return 0
+
+    let deleted = 0
+    for (const key of normalizedKeys) {
+      for (const ext of extensions) {
+        const candidate = join(dirPath, `${key}_thumb${ext}`)
+        if (!existsSync(candidate)) continue
+        try {
+          unlinkSync(candidate)
+          deleted++
+        } catch { }
+      }
+    }
+
+    for (const [cacheKey, resolvedPath] of this.resolvedCache.entries()) {
+      const lowerKey = this.normalizeDatBase(cacheKey.toLowerCase())
+      if (!normalizedKeys.includes(lowerKey)) continue
+      if (!this.isThumbnailPath(resolvedPath)) continue
+      if (dirname(resolvedPath) !== dirPath) continue
+      this.resolvedCache.delete(cacheKey)
     }
 
     return deleted
@@ -1562,36 +2098,26 @@ export class ImageDecryptService {
     return this.asciiKey16(trimmed)
   }
 
-  private async decryptDatAuto(datPath: string, xorKey: number, aesKey: Buffer | null): Promise<Buffer> {
-    const version = this.getDatVersion(datPath)
-
-    if (version === 0) {
-      return this.decryptDatV3(datPath, xorKey)
+  private async decryptDatAuto(
+    datPath: string,
+    xorKey: number,
+    aesKey: Buffer | null,
+    aesKeyText?: string
+  ): Promise<DatDecryptOutcome> {
+    const nativeResult = this.tryDecryptDatWithNative(datPath, xorKey, aesKeyText)
+    if (nativeResult && this.looksLikeNativeImagePayload(nativeResult.data)) {
+      return { data: nativeResult.data, source: 'native' }
     }
-    if (version === 1) {
-      const key = this.asciiKey16(this.defaultV1AesKey)
-      return this.decryptDatV4(datPath, xorKey, key)
+    const fallbackReason = nativeResult ? 'invalid_native_payload' : 'native_unavailable'
+    if (nativeResult || nativeDecryptEnabled()) {
+      console.warn(`[ImageDecrypt] Native DAT 解密不可用，回退 TS: ${datPath} reason=${fallbackReason}`)
     }
-    // version === 2
-    if (!aesKey || aesKey.length !== 16) {
-      throw new Error('请到设置配置图片解密密钥')
-    }
-    return this.decryptDatV4(datPath, xorKey, aesKey)
+    return this.decryptDatLegacy(datPath, xorKey, aesKey, fallbackReason)
   }
 
-  public decryptDatFile(inputPath: string, xorKey: number, aesKey?: Buffer): Buffer {
-    const version = this.getDatVersion(inputPath)
-    if (version === 0) {
-      return this.decryptDatV3(inputPath, xorKey)
-    } else if (version === 1) {
-      const key = this.asciiKey16(this.defaultV1AesKey)
-      return this.decryptDatV4(inputPath, xorKey, key)
-    } else {
-      if (!aesKey || aesKey.length !== 16) {
-        throw new Error('V4版本需要16字节AES密钥')
-      }
-      return this.decryptDatV4(inputPath, xorKey, aesKey)
-    }
+  public decryptDatFile(inputPath: string, xorKey: number, aesKey?: Buffer | string): Buffer {
+    const { buffer, text } = this.normalizeAesKeyInput(aesKey)
+    return this.decryptDatFileInternal(inputPath, xorKey, buffer, text)
   }
 
   public getDatVersion(inputPath: string): number {
@@ -1610,6 +2136,99 @@ export class ImageDecryptService {
       return 2
     }
     return 0
+  }
+
+  private decryptDatFileInternal(inputPath: string, xorKey: number, aesKey: Buffer | null, aesKeyText?: string): Buffer {
+    const outcome = this.tryDecryptDatWithNative(inputPath, xorKey, aesKeyText)
+    if (outcome && this.looksLikeNativeImagePayload(outcome.data)) {
+      return outcome.data
+    }
+    if (outcome || nativeDecryptEnabled()) {
+      const reason = outcome ? 'invalid_native_payload' : 'native_unavailable'
+      console.warn(`[ImageDecrypt] Native 文件解密不可用，回退 TS: ${inputPath} reason=${reason}`)
+    }
+    return this.decryptDatLegacy(inputPath, xorKey, aesKey).data
+  }
+
+  private decryptDatLegacy(
+    inputPath: string,
+    xorKey: number,
+    aesKey: Buffer | null,
+    fallbackReason?: string
+  ): DatDecryptOutcome {
+    const version = this.getDatVersion(inputPath)
+    if (version === 0) {
+      return { data: this.decryptDatV3(inputPath, xorKey), source: 'ts', fallbackReason }
+    }
+    if (version === 1) {
+      const key = this.asciiKey16(this.defaultV1AesKey)
+      return { data: this.decryptDatV4(inputPath, xorKey, key), source: 'ts', fallbackReason }
+    }
+    if (!aesKey || aesKey.length !== 16) {
+      throw new Error('请到设置配置图片解密密钥')
+    }
+    return { data: this.decryptDatV4(inputPath, xorKey, aesKey), source: 'ts', fallbackReason }
+  }
+
+  private normalizeAesKeyInput(aesKey?: Buffer | string): { buffer: Buffer | null; text: string } {
+    if (typeof aesKey === 'string') {
+      const text = aesKey.trim()
+      return {
+        buffer: text ? this.asciiKey16(text) : null,
+        text
+      }
+    }
+    return {
+      buffer: aesKey ?? null,
+      text: ''
+    }
+  }
+
+  private tryDecryptDatWithNative(
+    inputPath: string,
+    xorKey: number,
+    aesKeyText?: string
+  ): { data: Buffer; ext: string; isWxgf: boolean } | null {
+    const result = decryptDatViaNative(inputPath, xorKey, aesKeyText || undefined)
+    if (!this.nativeLogged) {
+      this.nativeLogged = true
+      if (process.env.CIPHERTALK_IMAGE_DECRYPT_DEBUG === '1') {
+        if (result) {
+          const metadata = nativeAddonMetadata()
+          console.info('[ImageDecrypt] Native DAT 解密已启用', {
+            addonPath: nativeAddonLocation(),
+            source: 'native',
+            platform: process.platform,
+            arch: process.arch,
+            moduleName: metadata?.name || 'unknown',
+            moduleVersion: metadata?.version || 'unknown',
+            moduleVendor: metadata?.vendor || 'unknown'
+          })
+        } else {
+          const metadata = nativeAddonMetadata()
+          console.info('[ImageDecrypt] Native DAT 解密不可用', {
+            addonPath: nativeAddonLocation(),
+            source: 'native_unavailable',
+            platform: process.platform,
+            arch: process.arch,
+            moduleName: metadata?.name || 'unknown',
+            moduleVersion: metadata?.version || 'unknown',
+            moduleVendor: metadata?.vendor || 'unknown'
+          })
+        }
+      }
+    }
+    return result
+  }
+
+  private looksLikeNativeImagePayload(data: Buffer): boolean {
+    if (!Buffer.isBuffer(data) || data.length < 4) return false
+    if (data.length >= 20 &&
+      data[0] === 0x77 && data[1] === 0x78 &&
+      data[2] === 0x67 && data[3] === 0x66) {
+      return true
+    }
+    return this.detectImageExtension(data) !== null
   }
 
   private decryptDatV3(inputPath: string, xorKey: number): Buffer {
@@ -1738,27 +2357,30 @@ export class ImageDecryptService {
       }
     }
 
-    // 提取 HEVC NALU 裸流
-    const hevcData = this.extractHevcNalu(buffer)
-    // console.log(`[ImageDecrypt] wxgf buffer=${buffer.length} hevcData=${hevcData?.length}`)
-
-    if (!hevcData || hevcData.length < 100) {
-      console.warn(`[ImageDecrypt] HEVC NALU 提取失败或数据过短: buffer=${buffer.length} hevc=${hevcData?.length ?? 0}`)
+    // 提取 HEVC NALU 裸流。部分 wxgf 内会有多段 still-image HEVC，首段可能是白色占位帧。
+    const hevcStreams = this.extractHevcNaluStreams(buffer)
+    if (hevcStreams.length === 0) {
+      console.warn(`[ImageDecrypt] HEVC NALU 提取失败或数据过短: buffer=${buffer.length}`)
       return { data: buffer, isWxgf: true }
     }
 
-    // 尝试用 ffmpeg 转换
-    try {
+    let fallbackJpg: Buffer | null = null
+    for (const hevcData of hevcStreams) {
       const jpgData = await this.convertHevcToJpg(hevcData)
       if (jpgData && jpgData.length > 0) {
-        return { data: jpgData, isWxgf: false }
+        if (!this.isProbablyBlankConvertedJpeg(jpgData)) {
+          return { data: jpgData, isWxgf: false }
+        }
+        fallbackJpg ||= jpgData
       }
-    } catch (e) {
-      console.error('[ImageDecrypt] unwrapWxgf 转换过程异常:', e)
+    }
+
+    if (fallbackJpg) {
+      return { data: fallbackJpg, isWxgf: false }
     }
 
     // ffmpeg 失败，返回原始 HEVC 数据
-    return { data: hevcData, isWxgf: true }
+    return { data: hevcStreams[0], isWxgf: true }
   }
 
   /**
@@ -1775,7 +2397,28 @@ export class ImageDecryptService {
    * - PPS (34): 图像参数集
    * - IDR (19/20): 关键帧
    */
-  private extractHevcNalu(buffer: Buffer): Buffer | null {
+  private extractHevcNaluStreams(buffer: Buffer): Buffer[] {
+    const nalUnits = this.extractHevcNaluUnits(buffer)
+    if (nalUnits.length === 0) return []
+
+    const groups: Buffer[][] = []
+    let current: Buffer[] = []
+    for (const unit of nalUnits) {
+      const unitType = this.getHevcNalType(unit)
+      if (unitType === 32 && current.length > 0) {
+        groups.push(current)
+        current = []
+      }
+      current.push(unit)
+    }
+    if (current.length > 0) groups.push(current)
+
+    return groups
+      .map(group => this.mergeHevcNaluUnits(group))
+      .filter(stream => stream.length >= 100)
+  }
+
+  private extractHevcNaluUnits(buffer: Buffer): Buffer[] {
     const nalUnits: Buffer[] = []
     let i = 4 // 跳过 "wxgf" 头
 
@@ -1840,14 +2483,69 @@ export class ImageDecryptService {
       for (let j = 4; j < buffer.length - 4; j++) {
         if (buffer[j] === 0x00 && buffer[j + 1] === 0x00 &&
           buffer[j + 2] === 0x00 && buffer[j + 3] === 0x01) {
-          return buffer.subarray(j)
+          return [buffer.subarray(j + 4)]
         }
       }
-      return null
+      return []
     }
 
-    // 合并所有 NAL 单元
-    return Buffer.concat(nalUnits)
+    return nalUnits
+  }
+
+  private mergeHevcNaluUnits(nalUnits: Buffer[]): Buffer {
+    const chunks: Buffer[] = []
+    for (const unit of nalUnits) {
+      chunks.push(Buffer.from([0x00, 0x00, 0x00, 0x01]), unit)
+    }
+    return Buffer.concat(chunks)
+  }
+
+  private getHevcNalType(unit: Buffer): number | null {
+    if (!unit.length) return null
+    return (unit[0] >> 1) & 0x3f
+  }
+
+  private isProbablyBlankConvertedJpeg(data: Buffer): boolean {
+    const dimensions = this.getJpegDimensions(data)
+    if (!dimensions) return false
+    const pixels = dimensions.width * dimensions.height
+    if (pixels < 50_000) return false
+    return data.length * 100 < pixels * 4
+  }
+
+  private getJpegDimensions(data: Buffer): { width: number; height: number } | null {
+    if (data.length < 12 || data[0] !== 0xff || data[1] !== 0xd8) return null
+
+    let offset = 2
+    while (offset + 9 < data.length) {
+      if (data[offset] !== 0xff) {
+        offset += 1
+        continue
+      }
+      while (offset < data.length && data[offset] === 0xff) offset += 1
+      if (offset >= data.length) return null
+
+      const marker = data[offset]
+      offset += 1
+      if (marker === 0xd8 || marker === 0xd9 || (marker >= 0xd0 && marker <= 0xd7)) {
+        continue
+      }
+      if (offset + 2 > data.length) return null
+
+      const segmentLength = data.readUInt16BE(offset)
+      if (segmentLength < 2 || offset + segmentLength > data.length) return null
+
+      const isSof = marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc
+      if (isSof && segmentLength >= 7) {
+        const height = data.readUInt16BE(offset + 3)
+        const width = data.readUInt16BE(offset + 5)
+        return width > 0 && height > 0 ? { width, height } : null
+      }
+
+      offset += segmentLength
+    }
+
+    return null
   }
 
   /**
@@ -2207,21 +2905,9 @@ export class ImageDecryptService {
   }
 
   // 保留原有的解密到文件方法（用于兼容）
-  async decryptToFile(inputPath: string, outputPath: string, xorKey: number, aesKey?: Buffer): Promise<void> {
-    const version = this.getDatVersion(inputPath)
-    let decrypted: Buffer
-
-    if (version === 0) {
-      decrypted = this.decryptDatV3(inputPath, xorKey)
-    } else if (version === 1) {
-      const key = this.asciiKey16(this.defaultV1AesKey)
-      decrypted = this.decryptDatV4(inputPath, xorKey, key)
-    } else {
-      if (!aesKey || aesKey.length !== 16) {
-        throw new Error('V4版本需要16字节AES密钥')
-      }
-      decrypted = this.decryptDatV4(inputPath, xorKey, aesKey)
-    }
+  async decryptToFile(inputPath: string, outputPath: string, xorKey: number, aesKey?: Buffer | string): Promise<void> {
+    const { buffer, text } = this.normalizeAesKeyInput(aesKey)
+    const decrypted = this.decryptDatFileInternal(inputPath, xorKey, buffer, text)
 
     const outputDir = dirname(outputPath)
     if (!existsSync(outputDir)) {

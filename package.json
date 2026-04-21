@@ -1,6 +1,6 @@
 {
   "name": "ciphertalk",
-  "version": "4.1.9",
+  "version": "4.2.0",
   "description": "密语 - 微信聊天记录查看工具",
   "author": "ILoveBingLu",
   "license": "CC-BY-NC-SA-4.0",
@@ -10,6 +10,11 @@
     "icon:mac": "bash scripts/build-macos-icon.sh",
     "native:macos": "bash native-dlls/build-macos.sh",
     "native:macos:check": "node scripts/check-macos-native.js",
+    "native:image:check": "cargo check --manifest-path native/image-decrypt/Cargo.toml",
+    "native:image:build": "cargo build --manifest-path native/image-decrypt/Cargo.toml --release",
+    "native:image:check:current": "node scripts/check-image-native.cjs",
+    "native:image:sync": "node scripts/sync-image-native.cjs",
+    "native:image:build:sync": "npm run native:image:build && npm run native:image:sync",
     "build:prepare:mac": "node scripts/patch-dmg-builder.cjs",
     "build:prepare": "node scripts/update-readme-version.js && node scripts/prepare-release-announcement.js",
     "prebuild": "node scripts/update-readme-version.js && node scripts/prepare-release-announcement.js",
@@ -214,6 +219,8 @@
       "node_modules/sherpa-onnx-node/**/*",
       "node_modules/koffi/**/*",
       "dist-electron/workers/**/*",
+      "resources/wedecrypt/*.node",
+      "resources/wedecrypt/**/*.node",
       "resources/**/*"
     ]
   }
