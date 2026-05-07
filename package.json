@@ -32,6 +32,7 @@
     "mcp:probe": "node scripts/mcp-probe.js",
     "eval:retrieval": "node scripts/run-retrieval-evaluator.cjs",
     "test:agent-qa": "node scripts/test-agent-qa-independent.cjs",
+    "test:wcdb": "ELECTRON_RUN_AS_NODE=1 node_modules/electron/dist/Electron.app/Contents/MacOS/Electron scripts/wcdb-direct-read-test.js",
     "preview": "vite preview",
     "electron:dev": "vite --mode electron",
     "electron:build": "npm run build",
